@@ -35,7 +35,7 @@ console = Console()
 
 class MLBacktest:
     """
-    ML-based backtester using global XGBoost model for next-day return prediction.
+    ML-based evaluation using global XGBoost model for next-day return prediction.
     """
     
     def __init__(self, model_type: str = 'xgboost', retrain: bool = False):
@@ -74,7 +74,7 @@ class MLBacktest:
             pre_loaded_data: Optional pre-featured data to speed up iterations
         """
         console.print(Panel.fit(
-            f"[bold blue]IHSG ML Backtest[/bold blue]\n"
+            f"[bold blue]IHSG ML Evaluation[/bold blue]\n"
             f"[dim]{start_date} to {end_date}[/dim]\n"
             f"[dim]Model: {self.model_type.upper()}[/dim]",
             border_style="blue"
@@ -588,9 +588,7 @@ class MLBacktest:
             console.print("[red]No results[/red]")
             return
         
-        console.print("\n" + "=" * 60)
-        console.print(f"[bold]ML BACKTEST RESULTS ({self.model_type.upper()})[/bold]")
-        console.print("=" * 60)
+        console.print("\n" + "============================================================\nML EVALUATION RESULTS (XGBOOST)\n============================================================\n")
         
         table = Table(box=box.ROUNDED, show_header=False)
         table.add_column("Metric", style="cyan")
@@ -641,7 +639,7 @@ class MLBacktest:
 def main():
     import argparse
     
-    parser = argparse.ArgumentParser(description='ML-Based Backtest')
+    parser = argparse.ArgumentParser(description='ML-Based Evaluation')
     parser.add_argument('--start', default='2024-01-01', help='Start date')
     parser.add_argument('--end', default='2025-09-30', help='End date')
     parser.add_argument('--model', choices=['xgboost'], 

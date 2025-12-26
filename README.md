@@ -26,15 +26,18 @@ Paperium uses a streamlined, high-performance architecture centered around a sin
 ### 1. Model Training
 Train the global XGBoost model using historical data:
 ```bash
-uv run python scripts/train_model.py --type xgboost --target 0.85
+# Targeted training (90 days eval)
+uv run python scripts/train.py --days 90 --target 0.85
+
+# Max window training (using 3 years of data)
+uv run python scripts/train.py --days max --train-window max
 ```
 
-### 2. Backtesting
+### 2. Evaluation
 Verify performance over a specific period:
 ```bash
-uv run python scripts/ml_backtest.py --model xgboost --start 2024-01-01 --end 2025-09-30
+uv run python scripts/eval.py --start 2024-01-01 --end 2025-09-30
 ```
-
 ### 3. Morning Ritual (Live Signals)
 Generate trading recommendations before market open:
 ```bash

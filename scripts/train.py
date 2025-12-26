@@ -24,7 +24,7 @@ def main():
     parser = argparse.ArgumentParser(description='Targeted Model Training')
     parser.add_argument('--days', type=str, default='90', help='Evaluation period in calendar days or "max"')
     parser.add_argument('--train-window', type=str, default='252', help='Training window in trading days or "max"')
-    parser.add_argument('--target', type=float, default=0.80, help='Target effective Win Rate (0.0 to 1.0)')
+    parser.add_argument('--target', type=float, default=0.95, help='Target effective Win Rate (0.0 to 1.0)')
     parser.add_argument('--force', action='store_true', help='Replace champion if better. If False, saves with a new name.')
     parser.add_argument('--max-iter', type=int, default=5, help='Maximum optimization iterations')
 

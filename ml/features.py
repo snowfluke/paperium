@@ -103,6 +103,20 @@ class FeatureEngineer:
         df['volume_ma20'] = df['volume'].rolling(20).mean()
         df['relative_volume'] = df['volume'] / df['volume_ma20'].replace(0, 1)
         
+        # --- NEW QUANT FEATURES ---
+        
+        # Volatility Z-Score: Detects abnormal volatility periods
+        vol_mean = df['volatility_20d'].rolling(60).mean()
+        vol_std = df['volatility_20d'].rolling(60).std()
+        df['volatility_zscore'] = (df['volatility_20d'] - vol_mean) / vol_std.replace(0, 1)
+        
+        # Intraday Range Percentile: Where the close is within the daily range (averaged)
+        df['intraday_range_pct'] = df['close_position'].rolling(5).mean()
+        
+        # Mean Reversion Strength: Standardized distance from 20-day MA
+        price_to_ma_std = df['price_to_ma20'].rolling(60).std()
+        df['mean_reversion_strength'] = df['price_to_ma20'].abs() / price_to_ma_std.replace(0, 1)
+        
         return df
     
     def _add_lagged_features(self, df: pd.DataFrame) -> pd.DataFrame:

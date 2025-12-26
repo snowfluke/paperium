@@ -4,7 +4,7 @@ Kelly-criterion inspired position sizing with volatility adjustment
 """
 import pandas as pd
 import numpy as np
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Literal
 import logging
 
 logger = logging.getLogger(__name__)
@@ -45,7 +45,8 @@ class PositionSizer:
         stop_loss: float,
         win_rate: float = 0.55,
         avg_win_loss_ratio: float = 1.5,
-        confidence: float = 0.5
+        confidence: float = 0.5,
+        market_regime: Optional[Literal["HIGH_VOL", "LOW_VOL", "NORMAL"]] = None
     ) -> Dict:
         """
         Calculate position size using multiple factors.
@@ -91,6 +92,10 @@ class PositionSizer:
         max_position = portfolio_value / self.max_positions
         position_value = min(position_value, max_position)
         
+        # Apply market regime multiplier
+        regime_mult = self._get_regime_multiplier(market_regime)
+        position_value = position_value * regime_mult
+        
         # Calculate shares
         shares = int(position_value / entry_price) if entry_price > 0 else 0
         actual_value = shares * entry_price
@@ -102,9 +107,27 @@ class PositionSizer:
             'risk_amount': round(shares * risk_per_share, 2),
             'risk_pct': round(shares * risk_per_share / portfolio_value * 100, 2),
             'vol_adjustment': round(vol_adjustment, 2),
+            'regime_adjustment': round(regime_mult, 2),
             'kelly_fraction': round(kelly_pct, 3),
             'sizing_method': 'risk_adjusted'
         }
+    
+    def _get_regime_multiplier(self, regime: Optional[str]) -> float:
+        """
+        Get position size multiplier based on market regime.
+        
+        Args:
+            regime: Market regime string (HIGH_VOL, LOW_VOL, NORMAL)
+            
+        Returns:
+            Multiplier to apply to position size
+        """
+        if regime == "HIGH_VOL":
+            return 0.7  # Reduce exposure in high volatility
+        elif regime == "LOW_VOL":
+            return 1.2  # Slightly increase in calm markets
+        else:
+            return 1.0  # Default
     
     def _calculate_kelly(self, win_rate: float, win_loss_ratio: float) -> float:
         """

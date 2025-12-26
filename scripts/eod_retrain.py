@@ -222,20 +222,23 @@ class EODRetraining:
             for m_type in ['xgboost', 'gd_sd']:
                 progress.add_task(f"Retraining {m_type.upper()}...", total=None)
                 
-                from ml.model import TradingModel
-                from ml.supply_demand_model import SupplyDemandModel
-                
                 if m_type == 'xgboost':
+                    from ml.model import TradingModel
                     challenger = TradingModel(config.ml)
                     metrics = challenger.train(full_df)
                     acc_challenger = metrics.get('cv_accuracy', 0)
                 else:
+                    from ml.supply_demand_model import SupplyDemandModel
                     challenger = SupplyDemandModel()
                     metrics = challenger.train(full_df)
-                    acc_challenger = 0.65 # Stable baseline for GD/SD
+                    acc_challenger = 0.65 
                 
                 current_best = self.trainer.champion_metadata[m_type]['win_rate']
-                save_path = f"models/global_{'xgb' if m_type == 'xgboost' else 'sd'}_champion.pkl"
+                if m_type == 'xgboost':
+                    fname = 'xgb'
+                else:
+                    fname = 'sd'
+                save_path = f"models/global_{fname}_champion.pkl"
                 
                 if acc_challenger > 0.60: 
                     console.print(f"  [green]✓ {m_type.upper()} passed validation ({acc_challenger:.1%})[/green]")

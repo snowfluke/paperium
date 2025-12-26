@@ -37,6 +37,10 @@ class AutoTrainer:
     def __init__(self):
         self.storage = DataStorage(config.data.db_path)
         self.champion_metadata = self._load_metadata()
+        # Migration: Ensure all keys exist
+        for k in ['xgboost', 'gd_sd']:
+            if k not in self.champion_metadata:
+                self.champion_metadata[k] = {'win_rate': 0.0, 'date': None}
         
     def _load_metadata(self) -> Dict:
         """Load tracking of current best models."""
@@ -60,8 +64,8 @@ class AutoTrainer:
     def run_optimization_loop(self):
         """Run the rigorous Train -> Backtest -> Verify loop (Optimized)"""
         console.print("[bold cyan]Starting Optimized Auto-Training Loop[/bold cyan]")
-        console.print(f"Current XGB Champion: [green]{self.champion_metadata['xgboost']['win_rate']:.1%}[/green]")
-        console.print(f"Current GD/SD Champion: [green]{self.champion_metadata['gd_sd']['win_rate']:.1%}[/green]")
+        console.print(f"Current XGB Champion: [green]{self.champion_metadata.get('xgboost', {'win_rate':0})['win_rate']:.1%}[/green]")
+        console.print(f"Current GD/SD Champion: [green]{self.champion_metadata.get('gd_sd', {'win_rate':0})['win_rate']:.1%}[/green]")
         
         # Step 0: Initial Data Loading & Feature Calculation (LOAD ONCE)
         console.print("\n[yellow]⏳ Phase 0: One-time Data Preparation...[/yellow]")
@@ -119,7 +123,11 @@ class AutoTrainer:
                     
                     # Champion Comparison Logic
                     current_best_wr = self.champion_metadata[model_type]['win_rate']
-                    save_path = f"models/global_{'xgb' if model_type == 'xgboost' else 'sd'}_champion.pkl"
+                    if model_type == 'xgboost':
+                        fname = 'xgb'
+                    else:
+                        fname = 'sd'
+                    save_path = f"models/global_{fname}_champion.pkl"
                     
                     if effective_wr > current_best_wr or not os.path.exists(save_path):
                         improvement = (effective_wr - current_best_wr) if current_best_wr > 0 else effective_wr

@@ -270,7 +270,7 @@ class MorningSignals:
                     try:
                         if model_name == 'xgboost':
                             prob = model.predict_latest(ticker_df)
-                        else:
+                        else: # gd_sd
                             res = model.predict_latest(ticker_df, ticker)
                             prob = (res['combined_score'] / 2) + 0.5
                             

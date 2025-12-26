@@ -27,8 +27,7 @@ ENV/
 # Project Specific
 data/*.db
 data/*.sqlite
-models/*.pkl
-models/*.joblib
+models
 reports/
 backtest/
 *.log

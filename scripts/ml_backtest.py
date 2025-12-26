@@ -269,7 +269,6 @@ class MLBacktest:
             except Exception as e:
                 console.print(f"  [red]✗[/red] Global GD+S/D training failed: {e}")
                 self.global_sd = None
-        
         return {
             'xgb': 1 if self.global_xgb else 0,
             'sd': 1 if self.global_sd else 0
@@ -287,13 +286,6 @@ class MLBacktest:
             except:
                 pass
         
-        # Gradient Descent + Supply/Demand
-        if self.global_sd and self.model_type in ['gd_sd', 'ensemble']:
-            try:
-                result = self.global_sd.predict_latest(df, ticker)
-                scores.append(result['combined_score'])
-            except:
-                pass
         
         if not scores:
             return 0.0
@@ -333,8 +325,8 @@ class MLBacktest:
         
         # Pre-calculate batch scores for ML models (XGBoost and GD part)
         console.print("[yellow]Batch predicting ML scores for all tickers...[/yellow]")
-        xgb_scores = {} # ticker -> Series of scores
-        gd_scores = {}  # ticker -> Series of scores
+        xgb_scores = {}  # ticker -> Series of scores
+        gd_scores = {}   # ticker -> Series of scores
         
         for ticker, ticker_df_indexed in ticker_data_map.items():
             ticker_df = ticker_df_indexed.reset_index() # Need original df for feature engineer

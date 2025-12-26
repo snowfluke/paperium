@@ -55,12 +55,21 @@ uv run python scripts/eod_retrain.py
 ```
 *Updates existing positions (SL/TP hits) and retrains the model with today's data.*
 
-## Intelligence & Strategies
 Paperium operates with a modular dual-brain architecture, enabling independent strategy management:
 
 ### Core Models
-*   **XGBoost (Champion)**: High-performance gradient boosted trees focused on next-day return probability. Excels at high-precision momentum entries.
-*   **GD/SD (Alternative)**: Structural strategy combining Gradient Descent price tracking with automated Supply/Demand zone detection for reversal entries.
+*   **XGBoost (Champion)**: High-performance gradient boosted trees focused on next-day return probability.
+*   **GD/SD (Alternative)**: Structural strategy combining Gradient Descent price tracking with Supply/Demand zone detection.
+
+## Execution Guide
+For the easiest experience, use the unified runner:
+```bash
+python run.py
+```
+This interactive menu handles all workflows:
+- **Morning Ritual**: Generate and review signals.
+- **Evening Update**: Retrain and update positions.
+- **Model Lab**: Targeted training for specific strategies.
 
 ### Quality Control: Champion vs Challenger
 The system ensures peak performance through a rigorous validation loop:

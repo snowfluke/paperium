@@ -75,7 +75,11 @@ def main():
             
             # Comparison
             current_best_wr = trainer.champion_metadata[args.type]['win_rate']
-            save_path = f"models/global_{'xgb' if args.type == 'xgboost' else 'sd'}_champion.pkl"
+            if args.type == 'xgboost':
+                fname = 'xgb'
+            else:
+                fname = 'sd'
+            save_path = f"models/global_{fname}_champion.pkl"
             
             if effective_wr > current_best_wr:
                 console.print(f"  [green]🚀 Champion Updated! ({current_best_wr:.1%} -> {effective_wr:.1%})[/green]")

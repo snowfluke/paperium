@@ -113,7 +113,7 @@ def main():
             
             if args.force:
                 if effective_wr > current_best_wr:
-                    console.print(f"  [green]🚀 Champion Updated! ({current_best_wr:.1%} -> {effective_wr:.1%})[/green]")
+                    console.print(f"  [green]Champion Updated! ({current_best_wr:.1%} -> {effective_wr:.1%})[/green]")
                     save_path = "models/global_xgb_champion.pkl"
                     bt.global_xgb.save(save_path)
                     

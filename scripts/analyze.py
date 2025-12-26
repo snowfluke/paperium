@@ -59,7 +59,7 @@ class StockAnalyzer:
         ))
         
         # 1. Fetch latest data using yfinance directly
-        console.print("\n[yellow]📊 Fetching Data...[/yellow]")
+        console.print("\n[yellow]Fetching Data...[/yellow]")
         end_date = datetime.now()
         start_date = end_date - timedelta(days=365)
         

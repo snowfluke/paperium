@@ -34,7 +34,11 @@ def main_menu():
     choice = Prompt.ask("\nSelect action", choices=["1", "2", "3", "4", "5", "0"], default="1")
     
     if choice == "1":
-        subprocess.run(["uv", "run", "python", "scripts/morning_signals.py"])
+        custom_capital = IntPrompt.ask("Extra Money / Free Capital to allocate (IDR)", default=0)
+        cmd = ["uv", "run", "python", "scripts/morning_signals.py"]
+        if custom_capital > 0:
+            cmd.extend(["--custom-capital", str(custom_capital)])
+        subprocess.run(cmd)
     elif choice == "2":
         subprocess.run(["uv", "run", "python", "scripts/eod_retrain.py"])
     elif choice == "3":

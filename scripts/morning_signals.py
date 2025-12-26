@@ -83,15 +83,18 @@ class MorningSignals:
                 logger.warning(f"Failed to load metadata: {e}")
         return {}
     
-    def run(self, portfolio_value: Optional[float] = None):
+    def run(self, portfolio_value: Optional[float] = None, custom_capital: float = 0.0):
         """
         Run morning signal generation.
         
         Args:
             portfolio_value: Total portfolio value (optional, falls back to config)
+            custom_capital: Extra capital to distribute among signals
         """
         if portfolio_value is None:
             portfolio_value = config.portfolio.total_value
+            
+        self.custom_capital = custom_capital
             
         # Get dynamic metrics
         win_rate = self.metadata.get('win_rate', 0.0)
@@ -133,7 +136,7 @@ class MorningSignals:
         new_signals = self._generate_signals(portfolio_value, existing_positions)
         
         # Step 4: Display recommendations
-        self._display_recommendations(existing_positions, new_signals)
+        self._display_recommendations(existing_positions, new_signals, custom_capital=self.custom_capital)
         
         # Step 5: Save positions ONLY in live mode
         if new_signals and is_live:
@@ -445,7 +448,8 @@ class MorningSignals:
     def _display_recommendations(
         self, 
         existing_positions: Dict[str, Dict],
-        new_signals: List[Dict]
+        new_signals: List[Dict],
+        custom_capital: float = 0.0
     ):
         """Display recommendations in formatted tables."""
         # Existing Positions Table
@@ -486,7 +490,7 @@ class MorningSignals:
 
         if new_signals:
             console.print("\n[bold cyan]━━━ NEW TRADING OPPORTUNITIES ━━━[/bold cyan]")
-            self._print_signal_table(new_signals)
+            self._print_signal_table(new_signals, custom_capital=custom_capital)
         
         # Summary Footer
         total_value = sum(s['position_value'] for s in new_signals)
@@ -500,11 +504,15 @@ class MorningSignals:
             f"Limit Orders: [bold yellow]{limit_orders}[/bold yellow]\n"
             f"Estimated Portfolio Exposure: [bold cyan]Rp {total_value:,.0f}[/bold cyan]"
         )
+        
+        if custom_capital > 0:
+            summary_text += f"\nCustom Capital to Allocate: [bold green]Rp {custom_capital:,.0f}[/bold green]"
+            
         console.print(Panel(summary_text, border_style="dim", padding=(0, 2)))
         console.print("[dim]⚠️  Execute based on pre-market opening conditions. Check for major gap-ups/downs.[/dim]")
         console.print()
 
-    def _print_signal_table(self, signals: List[Dict]):
+    def _print_signal_table(self, signals: List[Dict], custom_capital: float = 0.0):
         """Helper to print a rich table for a group of signals."""
         table = Table(box=box.SIMPLE_HEAD, show_lines=False)
         table.add_column("#", justify="right", style="dim")
@@ -518,13 +526,19 @@ class MorningSignals:
         table.add_column("Target", justify="right", style="green")
         table.add_column("Allocation", justify="right")
         
+        if custom_capital > 0:
+            table.add_column("Custom", justify="right", style="bold green")
+        
+        # Calculate total allocation to derive relative weights
+        total_alloc = sum(sig['position_value'] for sig in signals)
+        
         for i, sig in enumerate(signals, 1):
             order_style = "bold green" if sig['order_type'] == 'MARKET' else "yellow"
             conf_pct = min(100, max(0, sig['score'] * 100))
             
             mode_icon = "🔥 [bold red]SNIPER[/bold red]" if sig.get('strategy_mode') == 'EXPLOSIVE' else "[dim]⚖️ BASE[/dim]"
             
-            table.add_row(
+            row_data = [
                 str(i),
                 sig['ticker'].replace('.JK', ''),
                 mode_icon,
@@ -535,7 +549,14 @@ class MorningSignals:
                 f"{sig['stop_loss']:,.0f}",
                 f"{sig['take_profit']:,.0f}",
                 f"Rp {sig['position_value']:,.0f}"
-            )
+            ]
+            
+            if custom_capital > 0:
+                share = sig['position_value'] / total_alloc if total_alloc > 0 else 0
+                custom_amt = share * custom_capital
+                row_data.append(f"Rp {custom_amt:,.0f}")
+                
+            table.add_row(*row_data)
         
         console.print(table)
     
@@ -571,10 +592,11 @@ def main():
     import argparse
     
     parser = argparse.ArgumentParser(description='IHSG Morning Trading Signals')
+    parser.add_argument('--custom-capital', type=float, default=0.0, help='Custom capital to distribute among signals')
     args = parser.parse_args()
     
     signals = MorningSignals()
-    signals.run()
+    signals.run(custom_capital=args.custom_capital)
 
 
 if __name__ == "__main__":

@@ -9,6 +9,9 @@ Paperium is a high-performance quantitative trading system designed for the Indo
 Paperium uses a streamlined, high-performance architecture centered around a single, robust machine learning model:
 
 -   **The Predictor (XGBoost):** A sophisticated Gradient Boosting model that analyzes dozens of technical indicators and historical price patterns to predict the probability of a positive return on the next trading day.
+-   **Hybrid Strategy Intelligence:** Uses dual-mode signal processing:
+    -   **Strategy A (The Sniper):** High-confidence (score > 0.75), higher-conviction bets on rare explosive moves (🔥). Increases position sizing and aims for larger targets.
+    -   **Strategy B (The Grinder):** Consistent baseline signals to capture steady market moves (⚖️).
 
 ## Project Structure
 
@@ -62,7 +65,7 @@ This provides:
 ## Detailed Workflow
 
 ### Phase 1: Data Preparation
-The `DataFetcher` retrieves the latest OHLCV data for the IHSG stock universe. Features are calculated via the `FeatureEngineer`, normalizing indicators like RSI, MACD, and volatility for the XGBoost model.
+The `DataFetcher` retrieves the latest OHLCV data for the IHSG stock universe. Features are calculated via a self-contained `FeatureEngineer`, which internally generates 46 core indicators (RSI, MACD, ATR, SMA, etc.), ensuring 100% consistency between training and live inference.
 
 ### Phase 2: Signal Generation
 1.  **Screener:** Filters out illiquid or stable stocks based on volume and price volatility.

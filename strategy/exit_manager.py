@@ -57,7 +57,8 @@ class ExitManager:
         self, 
         entry_price: float, 
         atr: float,
-        direction: str = 'LONG'
+        direction: str = 'LONG',
+        mode: str = 'BASELINE'
     ) -> ExitLevels:
         """
         Calculate exit levels based on ATR.
@@ -70,12 +71,20 @@ class ExitManager:
         Returns:
             ExitLevels with calculated prices
         """
+        # Adaptive multipliers based on strategy mode
+        sl_mult = self.stop_loss_atr
+        tp_mult = self.take_profit_atr
+        
+        if mode == 'EXPLOSIVE':
+            sl_mult *= 0.8  # Tighter stop for higher conviction entries
+            tp_mult *= 1.5  # Aim for larger breakout move
+            
         if direction == 'LONG':
-            stop_loss = entry_price - (self.stop_loss_atr * atr)
-            take_profit = entry_price + (self.take_profit_atr * atr)
+            stop_loss = entry_price - (sl_mult * atr)
+            take_profit = entry_price + (tp_mult * atr)
         else:  # SHORT
-            stop_loss = entry_price + (self.stop_loss_atr * atr)
-            take_profit = entry_price - (self.take_profit_atr * atr)
+            stop_loss = entry_price + (sl_mult * atr)
+            take_profit = entry_price - (tp_mult * atr)
         
         # Apply maximum loss limit
         max_stop = entry_price * (1 - self.max_loss_pct) if direction == 'LONG' else entry_price * (1 + self.max_loss_pct)

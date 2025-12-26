@@ -44,6 +44,7 @@ class Position:
     shares: int
     position_value: float
     signal_score: float
+    strategy_mode: str  # BASELINE or EXPLOSIVE
     created_date: str
     status: str
     filled_date: Optional[str] = None
@@ -86,6 +87,7 @@ class PositionManager:
                     shares INTEGER NOT NULL,
                     position_value REAL NOT NULL,
                     signal_score REAL,
+                    strategy_mode TEXT DEFAULT 'BASELINE',
                     created_date TEXT NOT NULL,
                     status TEXT NOT NULL,
                     filled_date TEXT,
@@ -124,13 +126,13 @@ class PositionManager:
             cursor.execute("""
                 INSERT INTO positions 
                 (ticker, order_type, entry_price, limit_price, stop_loss, take_profit,
-                 shares, position_value, signal_score, created_date, status)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 shares, position_value, signal_score, strategy_mode, created_date, status)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 position.ticker, position.order_type, position.entry_price,
                 position.limit_price, position.stop_loss, position.take_profit,
                 position.shares, position.position_value, position.signal_score,
-                position.created_date, position.status
+                position.strategy_mode, position.created_date, position.status
             ))
             
             conn.commit()

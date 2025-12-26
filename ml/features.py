@@ -52,17 +52,19 @@ class FeatureEngineer:
     def create_features(
         self, 
         df: pd.DataFrame,
-        target_horizon: int = 1
-    ) -> Tuple[pd.DataFrame, pd.Series]:
+        target_horizon: int = 1,
+        include_raw_return: bool = False
+    ) -> Tuple[pd.DataFrame, pd.Series, Optional[pd.Series]]:
         """
         Create feature matrix and target variable.
         
         Args:
             df: DataFrame with OHLCV and indicator columns
             target_horizon: Days ahead to predict (default 1 = next day)
+            include_raw_return: Whether to return the raw float return for weighting
             
         Returns:
-            Tuple of (feature DataFrame, target Series)
+            Tuple of (feature DataFrame, target Series, optional raw_return Series)
         """
         df = df.copy()
         
@@ -89,6 +91,9 @@ class FeatureEngineer:
         X = df[self.LEGACY_46_FEATURES]
         y = df['target_direction']
         
+        if include_raw_return:
+            return X, y, df['target']
+            
         return X, y
     
     

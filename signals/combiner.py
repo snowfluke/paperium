@@ -89,10 +89,20 @@ class SignalCombiner:
         # Rank scores (higher is better)
         df['score_rank'] = df['composite_score'].rank(pct=True)
         
-        # Buy/Sell signals (Raised back to 0.3 for conservative strategy)
+        # Buy/Sell signals
         df['signal'] = 'HOLD'
+        df['strategy_mode'] = 'NONE'
+        
+        # Strategy B (Baseline)
         df.loc[df['composite_score'] > 0.3, 'signal'] = 'BUY'
+        df.loc[df['composite_score'] > 0.3, 'strategy_mode'] = 'BASELINE'
+        
+        # Strategy A (Explosive Sniper)
+        df.loc[df['composite_score'] > 0.75, 'strategy_mode'] = 'EXPLOSIVE'
+        
         df.loc[df['composite_score'] < -0.3, 'signal'] = 'SELL'
+        df.loc[df['composite_score'] < -0.3, 'strategy_mode'] = 'BASELINE' # Sells are baseline by default
+        df.loc[df['composite_score'] < -0.75, 'strategy_mode'] = 'EXPLOSIVE' # High conviction sells
         
         return df
     

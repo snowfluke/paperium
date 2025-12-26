@@ -397,8 +397,12 @@ class MorningSignals:
             else:
                 limit_price = None
             
+            # Determine strategy mode & sizing boost
+            strategy_mode = row.get('strategy_mode', 'BASELINE')
+            sizing_boost = 1.618 if strategy_mode == 'EXPLOSIVE' else 1.0 # Golden ratio boost for snipers
+            
             # Calculate exit levels
-            exit_levels = self.exit_manager.calculate_levels(entry_price, atr)
+            exit_levels = self.exit_manager.calculate_levels(entry_price, atr, mode=strategy_mode)
             
             # Calculate position size (Fixed bug: pass available capital, not pre-divided)
             try:
@@ -422,13 +426,14 @@ class MorningSignals:
                 'ticker': ticker,
                 'sector': sector,
                 'score': score,
+                'strategy_mode': strategy_mode,
                 'order_type': order_type,
                 'entry_price': round(entry_price, 0),
                 'limit_price': round(limit_price, 0) if limit_price else None,
                 'stop_loss': round(exit_levels.stop_loss, 0),
                 'take_profit': round(exit_levels.take_profit, 0),
-                'shares': size_info['shares'],
-                'position_value': round(size_info['position_value'], 0),
+                'shares': int(size_info['shares'] * sizing_boost),
+                'position_value': round(size_info['position_value'] * sizing_boost, 0),
                 'risk_reward': exit_levels.reward_ratio
             }
             
@@ -504,6 +509,7 @@ class MorningSignals:
         table = Table(box=box.SIMPLE_HEAD, show_lines=False)
         table.add_column("#", justify="right", style="dim")
         table.add_column("Ticker", style="cyan bold")
+        table.add_column("Mode", justify="center")
         table.add_column("Execution", justify="center")
         table.add_column("Strength", justify="right", style="magenta")
         table.add_column("Price", justify="right")
@@ -516,9 +522,12 @@ class MorningSignals:
             order_style = "bold green" if sig['order_type'] == 'MARKET' else "yellow"
             conf_pct = min(100, max(0, sig['score'] * 100))
             
+            mode_icon = "🔥 [bold red]SNIPER[/bold red]" if sig.get('strategy_mode') == 'EXPLOSIVE' else "[dim]⚖️ BASE[/dim]"
+            
             table.add_row(
                 str(i),
                 sig['ticker'].replace('.JK', ''),
+                mode_icon,
                 f"[{order_style}]{sig['order_type']}[/{order_style}]",
                 f"{conf_pct:.1f}%",
                 f"Rp {sig['entry_price']:,.0f}",
@@ -545,6 +554,7 @@ class MorningSignals:
                 shares=sig['shares'],
                 position_value=sig['position_value'],
                 signal_score=sig['score'],
+                strategy_mode=sig.get('strategy_mode', 'BASELINE'),
                 created_date=today,
                 status=PositionStatus.PENDING.value if sig['order_type'] == 'LIMIT' else PositionStatus.OPEN.value,
                 filled_date=today if sig['order_type'] == 'MARKET' else None,

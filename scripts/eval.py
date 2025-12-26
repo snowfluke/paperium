@@ -181,6 +181,7 @@ class MLBacktest:
         # Pool training data from all tickers
         pool_X = []
         pool_y = []
+        pool_returns = []
         
         console.print(f"  Pooling training data from {all_data['ticker'].nunique()} tickers...")
         
@@ -197,23 +198,54 @@ class MLBacktest:
             train_data = train_data.tail(min(train_window, len(train_data)))
             train_data = self._add_features(train_data)
             
-            # Use FeatureEngineer to get X, y
+            # Use FeatureEngineer to get X, y, returns
             temp_model = TradingModel(config.ml)
-            X, y = temp_model.feature_engineer.create_features(train_data)
+            X, y, returns = temp_model.feature_engineer.create_features(
+                train_data, 
+                target_horizon=temp_model.feature_engineer.target_horizon,
+                include_raw_return=True
+            )
             pool_X.append(X)
             pool_y.append(y)
+            pool_returns.append(returns)
             
         if not pool_X:
             return {'xgb': 0}
             
         X_combined = pd.concat(pool_X)
         y_combined = pd.concat(pool_y)
+        ret_combined = pd.concat(pool_returns)
         
         # Clean data for XGBoost (remove any remaining NaN or Inf)
-        X_combined = X_combined.replace([np.inf, -np.inf], np.nan).dropna()
-        y_combined = y_combined.loc[X_combined.index]
+        valid_idx = X_combined.replace([np.inf, -np.inf], np.nan).dropna().index
+        X_combined = X_combined.loc[valid_idx]
+        y_combined = y_combined.loc[valid_idx]
+        ret_combined = ret_combined.loc[valid_idx]
         
-        console.print(f"  Total training samples after cleaning: {len(X_combined)}")
+        # --- TRAINING REFINEMENT: NOISE DOWNSAMPLING ---
+        # Discard 50% of "boring" days (|return| < 0.5%) to reduce noise bias
+        noise_mask = (ret_combined.abs() < 0.005)
+        keep_mask = ~noise_mask
+        
+        # Randomly pick 50% of noise to keep
+        if noise_mask.any():
+            noise_indices = ret_combined[noise_mask].index
+            keep_noise_indices = np.random.choice(
+                noise_indices, 
+                size=len(noise_indices) // 2, 
+                replace=False
+            )
+            keep_mask.loc[keep_noise_indices] = True
+            
+        X_combined = X_combined[keep_mask]
+        y_combined = y_combined[keep_mask]
+        ret_combined = ret_combined[keep_mask]
+        
+        # --- TRAINING REFINEMENT: MAGNITUDE WEIGHTING ---
+        # Scale importance by move size: Weight = 1.0 + |return| * 10
+        sample_weights = 1.0 + (ret_combined.abs() * 10.0)
+        
+        console.print(f"  Total training samples after refinement: {len(X_combined)}")
         
         if len(X_combined) < 100:
             console.print("[red]Critical: Not enough training samples pooled.[/red]")
@@ -251,11 +283,18 @@ class MLBacktest:
                     self.global_xgb.model.set_params(use_label_encoder=False)
                 
                 if base_model is not None:
-                    # Incremental learning
-                    self.global_xgb.model.fit(X_combined, y_combined, xgb_model=base_model.get_booster())
+                    # Incremental learning with weights
+                    self.global_xgb.model.fit(
+                        X_combined, y_combined, 
+                        sample_weight=sample_weights,
+                        xgb_model=base_model.get_booster()
+                    )
                 else:
-                    # Fresh training
-                    self.global_xgb.model.fit(X_combined, y_combined)
+                    # Fresh training with weights
+                    self.global_xgb.model.fit(
+                        X_combined, y_combined, 
+                        sample_weight=sample_weights
+                    )
                     
                 console.print("  ✓ Trained Global XGBoost model")
             except Exception as e:

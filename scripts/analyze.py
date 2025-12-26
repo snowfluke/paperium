@@ -389,6 +389,9 @@ class StockAnalyzer:
         # ═══════════════════════════════════════════════════════════════════
         console.print("\n[bold blue]━━━ ML PREDICTION & SIGNALS ━━━[/bold blue]")
         
+        latest = df.iloc[-1]
+        entry_price = latest['close']
+        
         table = Table(box=box.SIMPLE, show_header=False, padding=(0, 2))
         table.add_column("", style="dim")
         table.add_column("", justify="right")
@@ -410,14 +413,22 @@ class StockAnalyzer:
             table.add_row("ML Prediction", f"[yellow]{ml.get('error', 'Unavailable')}[/yellow]", "", "")
         
         # Signals
+        strategy_mode = latest.get('strategy_mode', 'BASELINE')
+        mode_color = "bold red" if strategy_mode == 'EXPLOSIVE' else "dim"
+        mode_icon = "🔥 EXPLOSIVE" if strategy_mode == 'EXPLOSIVE' else "⚖️ BASELINE"
+        
         sig_color = "green" if signals['signal'] == 'BUY' else "red" if signals['signal'] == 'SELL' else "yellow"
+        table.add_row(
+            "Strategy Mode", f"[{mode_color}]{mode_icon}[/{mode_color}]",
+            "Market Regime", regime['regime']
+        )
         table.add_row(
             "Signal", f"[{sig_color}]{signals['signal']}[/{sig_color}]",
             "Strength", signals['strength']
         )
         table.add_row(
             "Composite Score", f"{signals['composite_score']:.2f}",
-            "Market Regime", regime['regime']
+            "", ""
         )
         console.print(table)
         
@@ -426,18 +437,21 @@ class StockAnalyzer:
         # ═══════════════════════════════════════════════════════════════════
         console.print("\n[bold blue]━━━ RECOMMENDATION ━━━[/bold blue]")
         
-        latest = df.iloc[-1]
-        entry_price = latest['close']
+        # Use ExitManager for consistent adaptive levels
+        from strategy.exit_manager import ExitManager
+        exit_manager = ExitManager(config.exit)
         
-        # Calculate ATR for stops
-        high_low = df['high'] - df['low']
-        high_close = abs(df['high'] - df['close'].shift(1))
-        low_close = abs(df['low'] - df['close'].shift(1))
-        tr = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
-        atr = tr.rolling(14).mean().iloc[-1]
+        # Calculate ATR (ensure we use latest)
+        atr = latest.get('atr', entry_price * 0.02)
         
-        stop_loss = entry_price - (2 * atr)
-        take_profit = entry_price + (3 * atr)
+        exit_levels = exit_manager.calculate_levels(
+            entry_price=entry_price, 
+            atr=atr, 
+            mode=strategy_mode
+        )
+        
+        stop_loss = exit_levels.stop_loss
+        take_profit = exit_levels.take_profit
         
         # Determine action
         bullish = 0

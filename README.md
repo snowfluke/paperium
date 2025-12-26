@@ -44,6 +44,19 @@ Generate trading recommendations before market open:
 uv run python scripts/morning_signals.py
 ```
 
+### 4. Single Stock Analysis
+Deep-dive into any IHSG stock with comprehensive analysis:
+```bash
+uv run python scripts/analyze.py BBCA.JK --portfolio 100000000
+```
+This provides:
+-   **Basic Info:** Price, sector, 52W range, returns
+-   **Technical Analysis:** RSI, MACD, Moving Averages, Volatility
+-   **ML Prediction:** XGBoost probability and confidence
+-   **Signal Analysis:** Composite score and buy/sell signal
+-   **Market Regime:** Current volatility regime (HIGH_VOL/LOW_VOL/NORMAL)
+-   **Recommendation:** Position sizing, stop-loss, and take-profit levels
+
 ---
 
 ## Detailed Workflow

@@ -28,9 +28,10 @@ def main_menu():
     console.print("2. [bold magenta]Evening Update[/bold magenta] (EOD Retrain & Evaluation)")
     console.print("3. [bold cyan]Model Training[/bold cyan] (Customizable)")
     console.print("4. [bold blue]Evaluation[/bold blue] (Backtest)")
+    console.print("5. [bold white]Stock Analysis[/bold white] (Single Ticker Deep Dive)")
     console.print("0. Exit")
     
-    choice = Prompt.ask("\nSelect action", choices=["1", "2", "3", "4", "0"], default="1")
+    choice = Prompt.ask("\nSelect action", choices=["1", "2", "3", "4", "5", "0"], default="1")
     
     if choice == "1":
         subprocess.run(["uv", "run", "python", "scripts/morning_signals.py"])
@@ -40,12 +41,28 @@ def main_menu():
         train_menu()
     elif choice == "4":
         eval_menu()
+    elif choice == "5":
+        analyze_menu()
     elif choice == "0":
         console.print("[dim]Goodbye![/dim]")
         sys.exit(0)
         
     input("\nPress Enter to return to menu...")
     main_menu()
+
+def analyze_menu():
+    clear_screen()
+    console.print(Panel.fit("[bold cyan]Single Stock Analysis[/bold cyan]", border_style="cyan"))
+    
+    console.print("\n[dim]Comprehensive analysis of a single stock[/dim]\n")
+    
+    ticker = Prompt.ask("Enter ticker (e.g., BBCA.JK)")
+    portfolio = IntPrompt.ask("Portfolio value (IDR)", default=100_000_000)
+    
+    cmd = ["uv", "run", "python", "scripts/analyze.py", ticker, "--portfolio", str(portfolio)]
+    
+    console.print(f"\n[yellow]Executing: {' '.join(cmd)}[/yellow]\n")
+    subprocess.run(cmd)
 
 def train_menu():
     clear_screen()

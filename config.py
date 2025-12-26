@@ -547,6 +547,9 @@ class ExitConfig:
 @dataclass
 class PortfolioConfig:
     """Portfolio management configuration"""
+    # Total portfolio value for sizing calculations
+    total_value: float = 100_000_000  # Default 100M IDR
+    
     # Position sizing
     max_positions: int = 10
     base_position_pct: float = 0.10  # 10% per position

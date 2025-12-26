@@ -89,10 +89,10 @@ class SignalCombiner:
         # Rank scores (higher is better)
         df['score_rank'] = df['composite_score'].rank(pct=True)
         
-        # Buy/Sell signals (threshold lowered from 0.3 to 0.2 for more responsive signals)
+        # Buy/Sell signals (Raised back to 0.3 for conservative strategy)
         df['signal'] = 'HOLD'
-        df.loc[df['composite_score'] > 0.2, 'signal'] = 'BUY'
-        df.loc[df['composite_score'] < -0.2, 'signal'] = 'SELL'
+        df.loc[df['composite_score'] > 0.3, 'signal'] = 'BUY'
+        df.loc[df['composite_score'] < -0.3, 'signal'] = 'SELL'
         
         return df
     

@@ -12,6 +12,7 @@ import argparse
 import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
+from typing import Optional, Dict, List
 from rich.console import Console
 from rich.table import Table
 from rich.panel import Panel
@@ -66,8 +67,10 @@ class StockAnalyzer:
             self.model.load(model_path)
             self.model_trained_date = self.model.last_trained
     
-    def analyze(self, ticker: str, portfolio_value: float = 100_000_000):
+    def analyze(self, ticker: str, portfolio_value: Optional[float] = None):
         """Run comprehensive analysis on a single ticker."""
+        if portfolio_value is None:
+            portfolio_value = config.portfolio.total_value
         
         # Validate and normalize ticker
         try:
@@ -509,13 +512,11 @@ class StockAnalyzer:
 def main():
     parser = argparse.ArgumentParser(description='Single Stock Analysis')
     parser.add_argument('ticker', type=str, help='Stock ticker (e.g., BBCA or BBCA.JK)')
-    parser.add_argument('--portfolio', type=float, default=100_000_000, 
-                        help='Portfolio value for position sizing (default: 100M IDR)')
     
     args = parser.parse_args()
     
     analyzer = StockAnalyzer()
-    analyzer.analyze(args.ticker, args.portfolio)
+    analyzer.analyze(args.ticker)
 
 
 if __name__ == "__main__":

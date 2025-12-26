@@ -12,13 +12,17 @@ Or if installed:
 
 import sys
 import os
+import json
+import pickle
+import hashlib
+from pathlib import Path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import logging
 import pandas as pd
 import numpy as np
 from datetime import datetime, date
-from typing import Dict, List, Tuple
+from typing import Dict, List, Tuple, Optional
 from rich.console import Console
 from rich.table import Table
 from rich.panel import Panel
@@ -42,8 +46,8 @@ console = Console()
 
 # Thresholds for order type decision
 MARKET_ORDER_THRESHOLD = 0.70  # Lowered slightly
-LIMIT_ORDER_THRESHOLD = 0.40   # Lowered slightly
-MIN_SIGNAL_SCORE = 0.15        # Minimum score to consider (More inclusive)
+LIMIT_ORDER_THRESHOLD = 0.30   # Minimum filter threshold
+MIN_SIGNAL_SCORE = 0.30        # Increased to filter out weak/noisy signals (e.g. 20%)
 
 
 class MorningSignals:
@@ -66,18 +70,38 @@ class MorningSignals:
         self.position_sizer = PositionSizer(config.portfolio)
         self.position_manager = PositionManager()
         self.sector_mapping = get_sector_mapping()
+        self.metadata = self._load_metadata()
+
+    def _load_metadata(self) -> Dict:
+        """Load model metadata from JSON."""
+        metadata_path = 'models/champion_metadata.json'
+        if os.path.exists(metadata_path):
+            try:
+                with open(metadata_path, 'r') as f:
+                    return json.load(f).get('xgboost', {})
+            except Exception as e:
+                logger.warning(f"Failed to load metadata: {e}")
+        return {}
     
-    def run(self, portfolio_value: float = 100_000_000):
+    def run(self, portfolio_value: Optional[float] = None):
         """
         Run morning signal generation.
         
         Args:
-            portfolio_value: Total portfolio value for position sizing
+            portfolio_value: Total portfolio value (optional, falls back to config)
         """
+        if portfolio_value is None:
+            portfolio_value = config.portfolio.total_value
+            
+        # Get dynamic metrics
+        win_rate = self.metadata.get('win_rate', 0.0)
+        trained_date = self.metadata.get('date', 'Unknown')
+        
         console.print()
         console.print(Panel(
             f"[bold white]IHSG MORNING SIGNALS[/bold white]\n"
-            f"[dim]Quantitative Trading & Risk Management Dashboard • {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}[/dim]",
+            f"[dim]Quantitative Trading Dashboard • {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}[/dim]\n"
+            f"[dim]Model Win Rate: [bold green]{win_rate:.1%}[/bold green] | Trained: [dim]{trained_date}[/dim]",
             border_style="cyan",
             padding=(0, 2),
             box=box.DOUBLE
@@ -208,6 +232,33 @@ class MorningSignals:
         ml_predictions = {}
         unique_tickers = all_data['ticker'].unique()
         
+        
+        # Hourly Caching Logic
+        cache_dir = Path(".cache")
+        cache_dir.mkdir(exist_ok=True)
+        
+        # Create unique key based on date, hour, and ticker universe
+        ticker_list_str = "_".join(sorted(unique_tickers))
+        ticker_hash = hashlib.md5(ticker_list_str.encode()).hexdigest()[:8]
+        now = datetime.now()
+        cache_key = f"signals_{now.strftime('%Y%m%d_%H')}_{ticker_hash}.pkl"
+        cache_path = cache_dir / cache_key
+        
+        passed_tickers = []
+        data_by_ticker = {}
+        cached_found = False
+        
+        if cache_path.exists():
+            try:
+                with open(cache_path, 'rb') as f:
+                    cache_data = pickle.load(f)
+                    passed_tickers = cache_data.get('passed_tickers', [])
+                    data_by_ticker = cache_data.get('data_by_ticker', {})
+                    cached_found = True
+                console.print(f"  [green]✓ Using cached signals for this hour ({cache_path.name})[/green]")
+            except Exception as e:
+                logger.warning(f"Failed to load signal cache: {e}")
+
         with Progress(
             SpinnerColumn(),
             TextColumn("[progress.description]{task.description}"),
@@ -216,41 +267,54 @@ class MorningSignals:
             console=console
         ) as progress:
             
-            # Phase 0: Screening
-            console.print(f"  [cyan]Running High-Potential Screener...[/cyan]")
-            passed_tickers = []
-            
-            # Group data once for efficiency
-            all_grouped = all_data.sort_values('date').groupby('ticker')
-            
-            screen_task = progress.add_task("Screening candidates...", total=len(unique_tickers))
-            
-            for ticker in unique_tickers:
-                try:
-                    df = all_grouped.get_group(ticker)
-                    if self.screener._check_criteria(df, ticker):
-                        passed_tickers.append(ticker)
-                except KeyError:
-                    pass
-                progress.advance(screen_task)
+            if not cached_found:
+                # Phase 0: Screening
+                console.print(f"  [cyan]Running High-Potential Screener...[/cyan]")
                 
-            console.print(f"  [green]✓ {len(passed_tickers)} stocks passed screening out of {len(unique_tickers)}[/green]")
+                # Group data once for efficiency
+                all_grouped = all_data.sort_values('date').groupby('ticker')
+                
+                screen_task = progress.add_task("Screening candidates...", total=len(unique_tickers))
+                
+                for ticker in unique_tickers:
+                    try:
+                        df = all_grouped.get_group(ticker)
+                        if self.screener._check_criteria(df, ticker):
+                            passed_tickers.append(ticker)
+                    except KeyError:
+                        pass
+                    progress.advance(screen_task)
+                    
+                console.print(f"  [green]✓ {len(passed_tickers)} stocks passed screening out of {len(unique_tickers)}[/green]")
+                
+                if not passed_tickers:
+                    return []
+    
+                # Phase 1: Technical signals
+                sig_task = progress.add_task("Calculating technical signals...", total=len(passed_tickers))
+                for ticker in passed_tickers:
+                    ticker_data = all_grouped.get_group(ticker)
+                    
+                    if len(ticker_data) >= config.data.min_data_points:
+                        try:
+                            signals = self.signal_combiner.calculate_signals(ticker_data)
+                            data_by_ticker[ticker] = signals
+                        except Exception as e:
+                            logger.warning(f"Signal calculation failed for {ticker}: {e}")
+                    progress.advance(sig_task)
+                
+                # Save to cache
+                try:
+                    with open(cache_path, 'wb') as f:
+                        pickle.dump({
+                            'passed_tickers': passed_tickers,
+                            'data_by_ticker': data_by_ticker
+                        }, f)
+                except Exception as e:
+                    logger.warning(f"Failed to save signal cache: {e}")
             
             if not passed_tickers:
                 return []
-
-            # Phase 1: Technical signals
-            sig_task = progress.add_task("Calculating technical signals...", total=len(passed_tickers))
-            for ticker in passed_tickers:
-                ticker_data = all_grouped.get_group(ticker)
-                
-                if len(ticker_data) >= config.data.min_data_points:
-                    try:
-                        signals = self.signal_combiner.calculate_signals(ticker_data)
-                        data_by_ticker[ticker] = signals
-                    except Exception as e:
-                        logger.warning(f"Signal calculation failed for {ticker}: {e}")
-                progress.advance(sig_task)
             
             # Phase 2: ML predictions (XGBoost only)
             if self.model.model is not None:
@@ -267,8 +331,9 @@ class MorningSignals:
                 # Rank and process
                 rankings = self.signal_combiner.rank_stocks(data_by_ticker, ml_predictions)
                 if not rankings.empty:
+                    # STRICT FILTERING: Must be a BUY signal AND meet the score threshold
                     buy_signals = rankings[
-                        (rankings['signal'] == 'BUY') | (rankings['composite_score'] >= MIN_SIGNAL_SCORE)
+                        (rankings['signal'] == 'BUY') & (rankings['composite_score'] >= MIN_SIGNAL_SCORE)
                     ].copy()
                 else:
                     return []
@@ -276,37 +341,42 @@ class MorningSignals:
                 # Indicators only fallback
                 rankings = self.signal_combiner.rank_stocks(data_by_ticker, {})
                 if not rankings.empty:
+                    # STRICT FILTERING: Must be a BUY signal AND meet the score threshold
                     buy_signals = rankings[
-                        (rankings['signal'] == 'BUY') | (rankings['composite_score'] >= MIN_SIGNAL_SCORE)
+                        (rankings['signal'] == 'BUY') & (rankings['composite_score'] >= MIN_SIGNAL_SCORE)
                     ].copy()
                 else:
                     return []
         
-        # Debug: Print top 5 candidates for confirmation
-        if rankings is not None and not rankings.empty:
-            console.print("\n[dim]Top 5 Candidates (Debug):[/dim]")
-            for _, row in rankings.head(5).iterrows():
+        # PURE MODEL FOCUS: Rank strictly by strength and take top 10
+        # This decouples selection from sizing/constraints
+        if buy_signals is None or buy_signals.empty:
+            return []
+            
+        top_candidates = buy_signals.sort_values('composite_score', ascending=False).head(10)
+        
+        # Debug: Print top candidates for confirmation
+        if not top_candidates.empty:
+            console.print("\n[dim]Top Candidates by Model Strength (Raw):[/dim]")
+            for _, row in top_candidates.iterrows():
                 conf_pct = row['composite_score'] * 100
                 console.print(f"  [dim]{row['ticker']}: {conf_pct:.1f}%[/dim]")
         
-        # Exclude stocks already in portfolio (by SAME model)
-        # Allows different models to potentially hold same stock if they both agree
+        # Phase 3: Final signal generation with sizing
         new_signals = []
-        sector_count = {}
-        max_per_sector = 3
-        max_total_positions = 15 # Increased for multi-model
+        max_total_positions = 15 
         max_new_positions = max_total_positions - len(existing_positions)
         
-        for _, row in buy_signals.iterrows():
+        # Sector limits (still applied during sizing, but not selection)
+        sector_count = {}
+        max_per_sector = 3
+        
+        for _, row in top_candidates.iterrows():
             if len(new_signals) >= max_new_positions:
                 break
             
             ticker = row['ticker']
             sector = self.sector_mapping.get(ticker, 'Other')
-            
-            # Check sector limit
-            if sector_count.get(sector, 0) >= max_per_sector:
-                continue
             
             # Determine order type based on signal strength
             score = row['composite_score']
@@ -330,15 +400,23 @@ class MorningSignals:
             # Calculate exit levels
             exit_levels = self.exit_manager.calculate_levels(entry_price, atr)
             
-            # Calculate position size
-            size_info = self.position_sizer.calculate_position_size(
-                portfolio_value=portfolio_value / max_new_positions,
-                stock_volatility=row.get('volatility_20', 0.3),
-                avg_market_volatility=0.2,
-                entry_price=entry_price,
-                stop_loss=exit_levels.stop_loss,
-                confidence=min(1.0, score + 0.3)
-            )
+            # Calculate position size (Fixed bug: pass available capital, not pre-divided)
+            try:
+                size_info = self.position_sizer.calculate_position_size(
+                    portfolio_value=portfolio_value,
+                    stock_volatility=row.get('volatility_20', 0.3),
+                    avg_market_volatility=0.2,
+                    entry_price=entry_price,
+                    stop_loss=exit_levels.stop_loss,
+                    confidence=min(1.0, score + 0.5)  # Offset to ensure meaningful size for buy signals
+                )
+            except Exception as e:
+                logger.debug(f"Position sizing failed for {ticker}: {e}")
+                continue
+            
+            if size_info['shares'] <= 0:
+                logger.debug(f"Skipping {ticker} due to 0 shares (Size: {size_info['position_value']:.0f})")
+                continue
             
             signal = {
                 'ticker': ticker,
@@ -403,7 +481,6 @@ class MorningSignals:
 
         if new_signals:
             console.print("\n[bold cyan]━━━ NEW TRADING OPPORTUNITIES ━━━[/bold cyan]")
-            console.print("[dim]Generated by multi-factor combination (XGBOOST + Quant Signals)[/dim]")
             self._print_signal_table(new_signals)
         
         # Summary Footer
@@ -428,7 +505,7 @@ class MorningSignals:
         table.add_column("#", justify="right", style="dim")
         table.add_column("Ticker", style="cyan bold")
         table.add_column("Execution", justify="center")
-        table.add_column("Conf %", justify="right", style="magenta")
+        table.add_column("Strength", justify="right", style="magenta")
         table.add_column("Price", justify="right")
         table.add_column("Limit", justify="right")
         table.add_column("Stop Loss", justify="right", style="red")
@@ -484,15 +561,10 @@ def main():
     import argparse
     
     parser = argparse.ArgumentParser(description='IHSG Morning Trading Signals')
-    parser.add_argument('--portfolio', type=float, default=100_000_000,
-                       help='Total portfolio value (default: 100M IDR)')
-    parser.add_argument('--fetch-days', type=int, default=10,
-                       help='Days of data to fetch (default: 10)')
-    
     args = parser.parse_args()
     
     signals = MorningSignals()
-    signals.run(portfolio_value=args.portfolio)
+    signals.run()
 
 
 if __name__ == "__main__":

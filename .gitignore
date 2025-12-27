@@ -32,8 +32,9 @@ reports/
 backtest/
 *.log
 .DS_Store
+sandbox
+.cache
 
 # UV
 uv.lock
 .uv/
-.cache

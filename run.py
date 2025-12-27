@@ -75,17 +75,39 @@ def train_menu():
     # Customizable parameters
     console.print("\n[dim]Configure training parameters:[/dim]\n")
     
-    target = Prompt.ask("Target Win Rate (e.g. 0.80)", default="0.80")
-    days = Prompt.ask("Evaluation days (number or 'max')", default="90")
-    train_window = Prompt.ask("Training window (number or 'max')", default="252")
-    max_iter = IntPrompt.ask("Max optimization iterations", default=5)
-    force = Confirm.ask("Replace champion if better?", default=True)
+    # Show current champion info
+    try:
+        import json
+        with open('models/champion_metadata.json', 'r') as f:
+            metadata = json.load(f)
+        current_wr = metadata.get('xgboost', {}).get('win_rate', 0)
+        current_wl = metadata.get('xgboost', {}).get('wl_ratio', 0)
+        current_score = metadata.get('xgboost', {}).get('combined_score', current_wr)
+        console.print(f"[cyan]Current Champion:[/cyan] WR={current_wr:.1%}, W/L={current_wl:.2f}x, Score={current_score:.1%}\n")
+    except:
+        pass
+    
+    target = Prompt.ask("Target Combined Score (Win Rate + W/L Ratio, 0.0-1.0)", default="0.85")
+    days = Prompt.ask("Evaluation days (number or 'max')", default="365")
+    train_window = Prompt.ask("Training window (number or 'max')", default="max")
+    max_iter = IntPrompt.ask("Max optimization iterations", default=10)
+    
+    # Gen-5 hyperparameters
+    console.print("\n[yellow]Gen-5 Hyperparameters (leave blank for defaults):[/yellow]")
+    max_depth = Prompt.ask("  Max tree depth", default="6")
+    n_estimators = Prompt.ask("  Number of estimators", default="150")
+    learning_rate = Prompt.ask("  Learning rate", default="0.1")
+    
+    force = Confirm.ask("\nReplace champion if better?", default=True)
     
     cmd = ["uv", "run", "python", "scripts/train.py",
            "--target", target,
            "--days", days,
            "--train-window", train_window,
-           "--max-iter", str(max_iter)]
+           "--max-iter", str(max_iter),
+           "--max-depth", max_depth,
+           "--n-estimators", n_estimators,
+           "--learning-rate", learning_rate]
     
     if force:
         cmd.append("--force")

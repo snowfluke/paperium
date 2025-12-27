@@ -39,17 +39,19 @@ class MLBacktest:
     Target Horizon: 5-Day Forward Return (Day Trading Strategy)
     """
     
-    def __init__(self, model_type: str = 'xgboost', retrain: bool = False):
+    def __init__(self, model_type: str = 'xgboost', retrain: bool = False, custom_model_path: str = None):
         """
         Args:
             model_type: 'xgboost'
             retrain: If True, will train models before backtesting. 
                      If False, will load existing champion models or reject.
+            custom_model_path: Optional custom path to model file (for parallel execution)
         """
         self.storage = DataStorage(config.data.db_path)
         self.sector_mapping = get_sector_mapping()
         self.model_type = model_type
         self.retrain = retrain
+        self.custom_model_path = custom_model_path
         self.screener = Screener(config)
         
         # Trading parameters
@@ -155,16 +157,21 @@ class MLBacktest:
         return df
     
     def _load_models(self) -> bool:
-        """Load global models from the models/ directory."""
+        """Load global models from the models/ directory or custom path."""
         success = True
         
         if self.model_type == 'xgboost':
-            xgb_path = os.path.join("models", "global_xgb_champion.pkl")
+            # Use custom path if provided, otherwise default
+            if self.custom_model_path:
+                xgb_path = self.custom_model_path
+            else:
+                xgb_path = os.path.join("models", "global_xgb_champion.pkl")
+            
             if os.path.exists(xgb_path):
                 try:
                     self.global_xgb = TradingModel(config.ml)
                     self.global_xgb.load(xgb_path)
-                    console.print("  ✓ Loaded Global XGBoost model")
+                    console.print(f"  ✓ Loaded Global XGBoost model from {xgb_path}")
                 except Exception as e:
                     console.print(f"  [red]✗[/red] Failed to load XGBoost: {e}")
                     success = False
@@ -660,10 +667,11 @@ def main():
                        default='xgboost', help='Model type')
     parser.add_argument('--window', type=int, default=252, help='Training window in trading days')
     parser.add_argument('--retrain', action='store_true', help='Force retraining of models before evaluation')
+    parser.add_argument('--model-path', type=str, default=None, help='Custom path to model file (for parallel execution)')
     
     args = parser.parse_args()
     
-    bt = MLBacktest(model_type=args.model, retrain=args.retrain)
+    bt = MLBacktest(model_type=args.model, retrain=args.retrain, custom_model_path=args.model_path)
     bt.run(args.start, args.end, train_window=args.window)
 
 

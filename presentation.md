@@ -304,12 +304,28 @@ $$WR_{\text{eff}} = 0.7 \times \overline{WR}_{\text{monthly}} + 0.3 \times \min(
 
 This penalizes models with inconsistent performance. A model that wins 90% in some months but 40% in others will score lower than a model with consistent 70% wins.
 
-Each iteration adjusts stop-loss and take-profit percentages:
-- Iteration 1: SL=5%, TP=8%
-- Iteration 2: SL=6.5%, TP=6.5%
-- Iteration 3: SL=8%, TP=5%
+### Gen-5 Optimization: Combined Score (2024-12-27)
 
-The system automatically saves the best model that meets the target.
+Starting from Gen-5, the training target shifted from pure win rate to a **combined score** that prioritizes trade quality:
+
+**Combined Score Formula:**
+$$S_{\text{combined}} = 0.4 \times WR_{\text{eff}} + 0.6 \times \min\left(\frac{W/L}{2.5}, 1.0\right)$$
+
+Where Win/Loss (W/L) ratio is:
+$$\frac{W}{L} = \frac{|\text{Avg Win}|}{|\text{Avg Loss}|}$$
+
+**Rationale**: High win rate alone doesn't guarantee profitability. A model with 90% win rate but 1.5x W/L ratio (small wins, large losses) will underperform a model with 85% win rate and 2.5x W/L ratio (larger wins relative to losses).
+
+**Iteration Parameters (Gen-5):**
+- Iteration 1: SL=2.5%, TP=10% (wide targets for big wins)
+- Iteration 2: SL=2.8%, TP=9.2%
+- Iteration 3: SL=3.1%, TP=8.4%
+- ...iterates to SL=4%, TP=6.4%
+
+**Hyperparameter Tuning:**
+- Max depth: 6 (vs Gen-4's 5) - captures more complex patterns
+- N estimators: 150 (vs Gen-4's 100) - better learning
+- Learning rate: 0.1 (unchanged)
 
 ## Daily Operations: Morning Signals
 
@@ -326,16 +342,67 @@ The system automatically saves the best model that meets the target.
 
 The model runs every morning before market open, generating fresh signals based on yesterday's closing data. No human intervention required.
 
+## Model Evolution Analysis (4-Generation Comparison)
+
+On 2024-12-27, all 4 model generations (Gen-1 through Gen-4) were backtested over the same period (2024-12-01 to 2025-12-27) to understand performance evolution and identify the paradox of "high win rate, low profitability."
+
+### Backtest Results Summary
+
+| Generation | Win Rate | Total Return | Sharpe | Sortino | Max DD | Trades | Avg Win | Avg Loss | W/L Ratio |
+|------------|----------|--------------|--------|---------|--------|--------|---------|----------|-----------|
+| Gen-1      | 89.8%    | 412.3%       | 17.54  | 23.64   | -2.1%  | 695    | +7.6%   | -4.2%    | **1.81x** |
+| Gen-2      | 88.8%    | 407.1%       | 16.84  | 28.70   | -1.4%  | 704    | +7.5%   | -3.8%    | **1.97x** ✅ |
+| Gen-3      | 89.8%    | 413.6%       | 16.66  | 29.72   | -1.3%  | 703    | +7.5%   | -3.9%    | **1.92x** |
+| Gen-4      | 89.4%    | **417.9%** ✅ | **17.64** ✅ | **58.72** ✅ | **-0.7%** ✅ | 699    | +7.7%   | -4.3%    | **1.79x** |
+
+### Key Findings
+
+**1. All Models Are Remarkably Similar**
+- Win rate variance: 88.8% to 89.8% (only 1% spread)
+- Return variance: 407% to 418% (only 3% spread)
+- Root cause: Gen-2, Gen-3, Gen-4 all use **46 features** (same feature set), Gen-1 uses 43 features (similar core features overlap)
+- All trained with same hyperparameters (100 trees, depth 5, lr 0.1)
+
+**2. Gen-4 is the Best Overall Model**
+- ✅ Highest total return (417.9%)
+- ✅ Best Sharpe ratio (17.64) - best risk-adjusted returns
+- ✅ Best Sortino ratio (58.72) - **2x better** than others at avoiding downside volatility
+- ✅ Lowest max drawdown (-0.7%) - safest, most stable
+- ⚠️ Lowest Win/Loss ratio (1.79x) - only weakness
+
+**3. The "High Win Rate, Low Profitability" Paradox Was Misunderstood**
+- Original concern: "Gen-4 has 92.64% metadata win rate but high avg PnL loss"
+- **Reality**: Gen-4 doesn't have high PnL loss - it has the **best total return**
+- The 92.64% metadata win rate was from a **different evaluation period/window**, not comparable to the 2024-12 to 2025-12 backtest
+- Gen-4's avg loss (-4.3%) is offset by larger avg wins (+7.7%) and high win rate (89.4%)
+
+**4. Gen-2 Has Best Trade Quality**
+- Best Win/Loss ratio (1.97x) despite lower overall returns
+- Tighter avg losses (-3.8% vs Gen-4's -4.3%)
+- This suggests better trade selection or risk management
+
+### Strategy for Gen-5
+
+Based on this analysis, Gen-5 optimization targets:
+1. **Warm start from Gen-4** - best foundation (Sharpe 17.64, Sortino 58.72)
+2. **Target Win/Loss ratio improvement** - from 1.79x to 2.2x+ (learn from Gen-2's 1.97x)
+3. **Maintain Gen-4's stability** - keep low drawdown and high Sortino
+4. **Differentiate through hyperparameters** - deeper trees (depth 6), more estimators (150)
+5. **Optimize combined score** - 40% win rate + 60% W/L ratio (prioritize trade quality)
+
+Expected Gen-5 results: 420%+ return, 2.2x+ W/L ratio, Sortino > 60, max drawdown < 1%.
+
 ## Summary: The Complete Pipeline
 
 1. **Data**: 480 IHSG tickers, 5 years of OHLCV data in SQLite
 2. **Features**: 46 hardcoded features (returns, volatility, technical indicators, volume, calendar)
 3. **Target**: 5-day forward return direction (binary classification)
-4. **Model**: Single global XGBoost with 100 trees, depth 5, learning rate 0.1
+4. **Model**: Single global XGBoost with 100 trees, depth 5, learning rate 0.1 (Gen-4), evolving to depth 6 + 150 trees (Gen-5)
 5. **Training**: Pooled data from all tickers, noise filtering (50% removal), magnitude weighting (w = 1 + |r|×10), warm start from previous champion
 6. **Prediction**: Probability → Score [-1, 1], threshold > 0.1 for buy
 7. **Risk**: ATR-based stops, 10% position size, 5-day max hold, 10 max positions
-8. **Optimization**: Iterative training targeting effective win rate with dynamic stop/profit adjustment
+8. **Optimization**: Combined score targeting (0.4×WR + 0.6×W/L ratio) with iterative stop/profit adjustment (SL: 2.5%→4%, TP: 10%→6.4%)
 9. **Production**: Automated morning signals, model self-updates end-of-day
+10. **Evolution**: 4 generations analyzed, Gen-5 warm-starting from Gen-4 with W/L ratio focus
 
 Every component is deterministic and reproducible. No discretionary decisions, no manual overrides.

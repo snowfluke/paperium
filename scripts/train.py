@@ -136,15 +136,15 @@ def main():
                     bt.global_xgb.save(save_path)
                     
                     metadata['xgboost'] = {
-                        'win_rate': effective_wr,
-                        'wl_ratio': wl_ratio,
-                        'combined_score': combined_score,
+                        'win_rate': float(effective_wr),
+                        'wl_ratio': float(wl_ratio),
+                        'combined_score': float(combined_score),
                         'date': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-                        'target_met': combined_score >= args.target,
+                        'target_met': bool(combined_score >= args.target),
                         'hyperparams': {
-                            'max_depth': args.max_depth,
-                            'n_estimators': args.n_estimators,
-                            'learning_rate': args.learning_rate
+                            'max_depth': int(args.max_depth),
+                            'n_estimators': int(args.n_estimators),
+                            'learning_rate': float(args.learning_rate)
                         }
                     }
                     with open(metadata_path, 'w') as f:

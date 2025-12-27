@@ -26,6 +26,18 @@ Paperium uses a streamlined, high-performance architecture centered around a sin
 
 ## Quick Start Guide
 
+### 0. Initial Setup & Data Prep
+Before training or running the bot, you need clean data. Paperium now features Hourly Smart Caching to ensure you always have the latest data without hitting API limits.
+
+```bash
+# 1. Clean the stock list (removes illiquid/suspended stocks)
+uv run python scripts/clean_universe.py
+
+# 2. Fetch historical data (fills your database with years of price action)
+uv run python scripts/sync_data.py
+```
+
+
 ### 1. Model Training
 Train the global XGBoost model using historical data:
 ```bash

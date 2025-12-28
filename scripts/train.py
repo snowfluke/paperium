@@ -90,6 +90,13 @@ def main():
         processed_data_list.append(group)
     featured_data = pd.concat(processed_data_list).sort_values(['date', 'ticker'])
 
+    # Session setup for caching
+    session_timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    session_dir = os.path.join(".cache", f"session_{session_timestamp}")
+    if args.force:
+        os.makedirs(session_dir, exist_ok=True)
+        console.print(f"[dim]Session artifacts will be saved to: {session_dir}[/dim]")
+
     iteration = 0
     while iteration < args.max_iter:
         iteration += 1
@@ -136,6 +143,11 @@ def main():
             current_best_wr = metadata.get('xgboost', {}).get('win_rate', 0.0)
             
             if args.force:
+                # Save every iteration to session folder
+                cache_path = f"{session_dir}/iter_{iteration}.pkl"
+                bt.global_xgb.save(cache_path)
+                console.print(f"  [dim]Saved iteration {iteration} to {cache_path} (+.json)[/dim]")
+
                 # Compare using combined score instead of just win rate
                 current_best_score = metadata.get('xgboost', {}).get('combined_score', current_best_wr)
                 
@@ -165,7 +177,7 @@ def main():
                 timestamp = datetime.now().strftime('%Y%m%d_%H%M')
                 save_path = f"models/xgb_model_{timestamp}.pkl"
                 bt.global_xgb.save(save_path)
-                console.print(f"  [blue]Model saved to {save_path}[/blue]")
+                console.print(f"  [blue]Model saved to {save_path} (+.json)[/blue]")
             
             if combined_score >= args.target:
                 console.print(f"[bold green]Target reached! Optimization complete.[/bold green]")

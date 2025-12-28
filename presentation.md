@@ -135,9 +135,8 @@ df['target_direction'] = (df['target'] > 0).astype(int)
 
 The model predicts whether the stock will be profitable 5 days into the future (binary classification: 1 = up, 0 = down/flat). The choice of 5 days aligns with the `max_holding_days` exit rule in backtesting ([`config.py:540`](file:///Users/vexeee/Documents/project/paperium/config.py#L540)).
 
-## XGBoost Architecture: Global Pooled Model
+Rather than training individual models per ticker, Paperium uses a **single global model** trained on pooled data from all 956 tickers. This approach increases training samples and allows the model to learn cross-sectional patterns.
 
-Rather than training individual models per ticker, Paperium uses a **single global model** trained on pooled data from all 480 tickers. This approach increases training samples and allows the model to learn cross-sectional patterns.
 
 ### Model Hyperparameters
 
@@ -318,21 +317,24 @@ $$\frac{W}{L} = \frac{|\text{Avg Win}|}{|\text{Avg Loss}|}$$
 **Rationale**: High win rate alone doesn't guarantee profitability. A model with 90% win rate but 1.5x W/L ratio (small wins, large losses) will underperform a model with 85% win rate and 2.5x W/L ratio (larger wins relative to losses).
 
 **Iteration Parameters (Gen-5):**
-- Iteration 1: SL=5%, TP=8% (Stable Gen 5 Target)
-- Fixed Parameters: Depth 6, Estimators 150
+- Iteration 1: SL/TP from config (Defaults: 5% / 8%)
+- Iteration 2+: Iterative tuning of risk parameters to maximize PnL gain.
+- Parameters: Depth 6, Estimators 150 (Ultimate Gen 5 Specs)
 
 
-**Hyperparameter Tuning:**
-- Max depth: 6 (vs Gen-4's 5) - captures more complex patterns
-- N estimators: 150 (vs Gen-4's 100) - better learning
-- Learning rate: 0.1 (unchanged)
+
+**Note on Hyperparameters:**
+We have upgraded to **Max Depth 6** and **150 Estimators** for Gen-5. This increased model capacity allows for better feature extraction from the expanded 956-ticker dataset (over 1M records), directly targeting higher Win Rates and better Win/Loss ratios.
+
+
 
 ## Daily Operations: Morning Signals
 
 ```python
 # scripts/morning_signals.py execution flow:
 # 1. Load champion model from models/global_xgb_champion.pkl
-# 2. Fetch latest OHLCV data for all 480 tickers
+# 2. Fetch latest OHLCV data for all 956 tickers
+
 # 3. Calculate 46 features for each ticker
 # 4. Run screener filters
 # 5. Predict probabilities for passing tickers
@@ -386,10 +388,12 @@ On 2024-12-27, all 4 model generations (Gen-1 through Gen-4) were backtested ove
 Based on this analysis, Gen-5 optimization targets:
 1. **Warm start from Gen-4** - best foundation (Sharpe 17.64, Sortino 58.72)
 2. **Target Win/Loss ratio improvement** - from 1.79x to 2.2x+ (Gen 4 weakness was low W/L ratio; Gen 2 was historical best at 1.97x)
-3. **Maintain Gen-4's stability** - keep low drawdown and high Sortino
-4. **Differentiate through hyperparameters** - deeper trees (depth 6), more estimators (150)
-5. **Optimize combined score** - 40% win rate + 60% W/L ratio (prioritize trade quality)
-6. **Tighten screening** - Price > 200, Volume > 2M, Value > 2B to handle the expanded 956-ticker universe.
+3. **Maintain Gen-4's stability** - keep low drawdown and high Sortino.
+4. **Ultimate Specs** - Deeper trees (Depth 6) and more estimators (150) to capture complex alpha.
+5. **Combined Score Focus** - 40% win rate + 60% W/L ratio (prioritize absolute PnL quality).
+6. **Tighten screening** - Price > 200, Volume > 2M, Value > 2B to filter high-noise tickers.
+
+
 
 Expected Gen-5 results: 420%+ return, 2.2x+ W/L ratio, Sortino > 60, max drawdown < 1%.
 
@@ -400,11 +404,14 @@ Expected Gen-5 results: 420%+ return, 2.2x+ W/L ratio, Sortino > 60, max drawdow
 
 2. **Features**: 46 hardcoded features (returns, volatility, technical indicators, volume, calendar)
 3. **Target**: 5-day forward return direction (binary classification)
-4. **Model**: Single global XGBoost with 100 trees, depth 5, learning rate 0.1 (Gen-4), evolving to depth 6 + 150 trees (Gen-5)
+4. **Model**: Single global XGBoost with 150 trees, depth 6, learning rate 0.1 (Gen-5 Ultimate)
+
+
 5. **Training**: Pooled data from all tickers, noise filtering (50% removal), magnitude weighting (w = 1 + |r|×10), warm start from previous champion
 6. **Prediction**: Probability → Score [-1, 1], threshold > 0.1 for buy
 7. **Risk**: ATR-based stops, 10% position size, 5-day max hold, 10 max positions
-8. **Optimization**: Combined score targeting (0.4×WR + 0.6×W/L ratio) with iterative stop/profit adjustment (SL: 2.5%→4%, TP: 10%→6.4%)
+8. **Optimization**: Combined score targeting (0.4×WR + 0.6×W/L ratio) with iterative tuning (SL: 4%→8%, TP: 5%→1%)
+
 9. **Production**: Automated morning signals, model self-updates end-of-day
 10. **Evolution**: 4 generations analyzed, Gen-5 warm-starting from Gen-4 with W/L ratio focus
 

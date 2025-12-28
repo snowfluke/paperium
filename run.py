@@ -119,12 +119,6 @@ def train_menu():
     train_window = Prompt.ask("Training window (number or 'max')", default="max")
     max_iter = IntPrompt.ask("Max optimization iterations", default=10)
     
-    # Gen-5 hyperparameters
-    console.print("\n[yellow]Gen-5 Hyperparameters (leave blank for defaults):[/yellow]")
-    max_depth = Prompt.ask("  Max tree depth", default="6")
-    n_estimators = Prompt.ask("  Number of estimators", default="150")
-    learning_rate = Prompt.ask("  Learning rate", default="0.1")
-    
     use_gpu = Confirm.ask("\nUse GPU acceleration?", default=True)
     force = Confirm.ask("Replace champion if better?", default=True)
     
@@ -132,10 +126,7 @@ def train_menu():
            "--target", target,
            "--days", days,
            "--train-window", train_window,
-           "--max-iter", str(max_iter),
-           "--max-depth", max_depth,
-           "--n-estimators", n_estimators,
-           "--learning-rate", learning_rate]
+           "--max-iter", str(max_iter)]
     
     if force:
         cmd.append("--force")
@@ -145,6 +136,7 @@ def train_menu():
     
     console.print(f"\n[yellow]Executing: {' '.join(cmd)}[/yellow]\n")
     subprocess.run(cmd)
+
 
 def eval_menu():
     clear_screen()

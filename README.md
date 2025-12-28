@@ -24,6 +24,31 @@ Paperium uses a streamlined, high-performance architecture centered around a sin
 
 ---
 
+## Requirements:
+
+1. python 3
+2. uv package manager
+
+### Setup
+
+```bash
+# Setup virtual environment
+uv venv
+
+# Activate the environment according to your OS
+
+# Install dependency
+uv sync
+```
+
+## Dashboard
+Run the unified runner for an interactive CLI experience:
+```bash
+uv run python run.py
+```
+
+---
+
 ## Quick Start Guide
 
 ### 0. Initial Setup & Data Prep
@@ -95,14 +120,6 @@ Every evening after market close, the `eod_retrain.py` script:
 1.  Evaluates current positions and updates P&L.
 2.  Incorporate today's price action into the training pool.
 3.  Performs a "Champion Challenge": Trains a new model and only replaces the current one if it shows superior validation accuracy.
-
----
-
-## Dashboard
-Run the unified runner for an interactive CLI experience:
-```bash
-uv run python run.py
-```
 
 ---
 

@@ -84,6 +84,8 @@ Generate trading recommendations before market open:
 uv run python scripts/morning_signals.py
 ```
 
+![Paperium Morning Signals](images/morning-signals.png)
+
 ### 4. Single Stock Analysis
 Deep-dive into any IHSG stock with comprehensive analysis:
 ```bash
@@ -97,9 +99,13 @@ This provides:
 -   **Market Regime:** Current volatility regime (HIGH_VOL/LOW_VOL/NORMAL)
 -   **Recommendation:** Position sizing, stop-loss, and take-profit levels
 
+![Paperium Single Stock Analysis](images/stock-analysis.png)
+
 ---
 
 ## Detailed Workflow
+
+See [Presentation](presentation.md) for more details.
 
 ### Phase 1: Data Preparation
 The `DataFetcher` retrieves the latest OHLCV data for the IHSG stock universe. Features are calculated via a self-contained `FeatureEngineer`, which internally generates 46 core indicators (RSI, MACD, ATR, SMA, etc.), ensuring 100% consistency between training and live inference.

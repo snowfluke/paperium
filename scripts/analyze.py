@@ -13,12 +13,11 @@ import argparse
 import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
-from typing import Optional, Dict, List
+from typing import Optional
 from rich.console import Console
 from rich.table import Table
 from rich.panel import Panel
 from rich import box
-from rich.text import Text
 
 from config import config
 from data.storage import DataStorage
@@ -26,7 +25,7 @@ from data.fetcher import get_sector_mapping
 from ml.model import TradingModel
 from ml.features import FeatureEngineer
 from signals.combiner import SignalCombiner
-from signals.regime_detector import RegimeDetector, MarketRegime
+from signals.regime_detector import RegimeDetector
 from strategy.position_sizer import PositionSizer
 
 console = Console()
@@ -152,7 +151,7 @@ class StockAnalyzer:
             padding=(0, 2)
         ))
     
-    def _fetch_data(self, ticker: str) -> pd.DataFrame:
+    def _fetch_data(self, ticker: str) -> Optional[pd.DataFrame]:
         """Fetch price data from Yahoo Finance."""
         try:
             import yfinance as yf
@@ -288,7 +287,7 @@ class StockAnalyzer:
             log(f"  [yellow]→ ML prediction failed: {e}[/yellow]")
             return {'probability': None, 'direction': 'N/A', 'confidence': 0, 'error': str(e)}
     
-    def _get_signals(self, df: pd.DataFrame, ml_prediction: dict = None) -> dict:
+    def _get_signals(self, df: pd.DataFrame, ml_prediction: Optional[dict] = None) -> dict:
         """Get trading signals with ML predictions included."""
         try:
             # Create ML predictions Series if we have valid predictions
@@ -448,7 +447,7 @@ class StockAnalyzer:
             )
             table.add_row(
                 "Up Probability", f"{ml['probability']*100:.1f}%",
-                "Model Date", self.model_trained_date or "Unknown"
+                "Model Date", self.model_trained_date.strftime('%Y-%m-%d') if self.model_trained_date else "Unknown"
             )
         else:
             table.add_row("ML Prediction", f"[yellow]{ml.get('error', 'Unavailable')}[/yellow]", "", "")

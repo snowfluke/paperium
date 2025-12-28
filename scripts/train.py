@@ -6,9 +6,7 @@ Allows training the XGBoost model with a combined performance target (Win Rate +
 import sys
 import os
 import argparse
-import time
 import sqlite3
-import json
 from datetime import datetime, timedelta
 import pandas as pd
 from rich.console import Console
@@ -17,7 +15,6 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from config import config
 from scripts.eval import MLBacktest
-from ml.model import TradingModel
 
 console = Console()
 
@@ -48,8 +45,8 @@ def main():
         df_dates = pd.read_sql("SELECT MIN(date), MAX(date) FROM prices", conn)
         conn.close()
         
-        db_min = pd.to_datetime(df_dates.iloc[0, 0])
-        db_max = pd.to_datetime(df_dates.iloc[0, 1])
+        db_min = pd.to_datetime(str(df_dates.iloc[0, 0]))
+        db_max = pd.to_datetime(str(df_dates.iloc[0, 1]))
         total_days = (db_max - db_min).days
         
         if args.days == 'max':

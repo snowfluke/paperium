@@ -182,17 +182,22 @@ class StatisticalSignals:
         import warnings
         with warnings.catch_warnings():
             warnings.filterwarnings("ignore", category=RuntimeWarning)
-            model = arch_model(scaled_returns, vol='Garch', p=1, q=1, rescale=False)
+            model = arch_model(scaled_returns, vol='GARCH', p=1, q=1, rescale=False)
             result = model.fit(disp='off', show_warning=False)
         
         # Get conditional volatility
         cond_vol = result.conditional_volatility / 100  # Scale back
-        
+
         # Forecast next-day volatility
         forecast = result.forecast(horizon=1)
-        
-        # Align with original DataFrame
-        df.loc[cond_vol.index, 'garch_cond_vol'] = cond_vol.values
+
+        # Align with original DataFrame - convert to Series if it's an array
+        if isinstance(cond_vol, pd.Series):
+            df.loc[cond_vol.index, 'garch_cond_vol'] = cond_vol.values
+        else:
+            # If it's an ndarray, convert to Series first
+            cond_vol_series = pd.Series(cond_vol, index=scaled_returns.index)
+            df.loc[cond_vol_series.index, 'garch_cond_vol'] = cond_vol_series.values
         
         return df
     
@@ -285,7 +290,15 @@ class PairTrading:
         
         for i, t1 in enumerate(tickers):
             for t2 in tickers[i+1:]:
-                corr = corr_matrix.loc[t1, t2]
+                corr_val = corr_matrix.loc[t1, t2]
+                # Convert to float, handling numpy/pandas scalar types
+                if isinstance(corr_val, (int, float, np.integer, np.floating)):
+                    corr = float(corr_val)
+                elif isinstance(corr_val, (complex, np.complexfloating)):
+                    corr = float(corr_val.real)  # Handle complex numbers by taking real part
+                else:
+                    # Skip non-numeric values
+                    continue
                 if corr >= min_correlation:
                     pairs.append((t1, t2, corr))
         
@@ -307,12 +320,12 @@ class PairTrading:
         """
         # Log price ratio (spread) - Safe log
         ratio = (prices1 / prices2).replace([0, np.inf, -np.inf], np.nan).fillna(1.0)
-        spread = np.log(ratio.abs())
+        spread = pd.Series(np.log(ratio.abs()), index=ratio.index)
 
-        
+
         # Rolling Z-score
         mean = spread.rolling(window=self.lookback).mean()
         std = spread.rolling(window=self.lookback).std()
         zscore = (spread - mean) / std.replace(0, np.inf)
-        
+
         return spread, zscore

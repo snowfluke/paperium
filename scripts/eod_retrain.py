@@ -12,17 +12,15 @@ Or if installed:
 
 import sys
 import os
+import json
 import pandas as pd
-import numpy as np
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import logging
 from datetime import datetime, date
-from typing import Dict, List
+from typing import Dict
 from rich.console import Console
-from rich.table import Table
 from rich.panel import Panel
-from rich import box
 from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TaskProgressColumn
 
 from config import config
@@ -30,7 +28,7 @@ from data.fetcher import DataFetcher
 from data.storage import DataStorage
 from signals.combiner import SignalCombiner
 from ml.model import TradingModel
-from strategy.position_manager import PositionManager, PositionStatus
+from strategy.position_manager import PositionManager
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -54,10 +52,12 @@ class EODRetraining:
         self.storage = DataStorage(config.data.db_path)
         self.fetcher = DataFetcher(config.data.stock_universe)
         self.signal_combiner = SignalCombiner(config)
-        
-        from scripts.auto_train import AutoTrainer
-        self.trainer = AutoTrainer() # Reuse metadata logic
-        
+
+        # Load champion metadata
+        metadata_path = os.path.join('models', 'champion_metadata.json')
+        with open(metadata_path, 'r') as f:
+            self.champion_metadata = json.load(f)
+
         self.position_manager = PositionManager()
     
     def run(self):
@@ -237,7 +237,7 @@ class EODRetraining:
                 challenger.save(os.path.join('models', 'global_xgb_champion.pkl'))
                 self.metrics_summary['xgboost'] = {'status': 'UPDATED', 'accuracy': acc_challenger}
             else:
-                current_best = self.trainer.champion_metadata['xgboost']['win_rate']
+                current_best = self.champion_metadata['xgboost']['win_rate']
                 console.print(f"  [red]✕ XGBOOST failed validation ({acc_challenger:.1%})[/red]")
                 self.metrics_summary['xgboost'] = {'status': 'KEPT_OLD', 'accuracy': current_best}
             

@@ -4,7 +4,7 @@ Creates ML features from price data and signals
 """
 import pandas as pd
 import numpy as np
-from typing import List, Optional, Tuple, Dict
+from typing import List, Optional, Tuple
 import logging
 
 from signals.technical import TechnicalIndicators
@@ -93,8 +93,8 @@ class FeatureEngineer:
         
         if include_raw_return:
             return X, y, df['target']
-            
-        return X, y
+
+        return X, y, None
     
     
     def _add_base_indicators(self, df: pd.DataFrame) -> pd.DataFrame:
@@ -208,11 +208,14 @@ class FeatureEngineer:
     def _add_calendar_features(self, df: pd.DataFrame) -> pd.DataFrame:
         """Add calendar-based features."""
         if 'date' in df.columns:
+            # Convert to datetime
             df['date'] = pd.to_datetime(df['date'])
-            df['day_of_week'] = df['date'].dt.dayofweek
-            df['month'] = df['date'].dt.month
-            df['is_month_start'] = df['date'].dt.is_month_start.astype(int)
-            df['is_month_end'] = df['date'].dt.is_month_end.astype(int)
+
+            # Extract datetime components using apply to avoid type issues
+            df['day_of_week'] = df['date'].apply(lambda x: x.dayofweek if pd.notna(x) else 0)
+            df['month'] = df['date'].apply(lambda x: x.month if pd.notna(x) else 1)
+            df['is_month_start'] = df['date'].apply(lambda x: int(x.is_month_start) if pd.notna(x) else 0)
+            df['is_month_end'] = df['date'].apply(lambda x: int(x.is_month_end) if pd.notna(x) else 0)
             
             # One-hot encode day of week
             for day in range(5):  # Mon-Fri

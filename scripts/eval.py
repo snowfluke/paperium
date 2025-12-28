@@ -59,7 +59,7 @@ class MLBacktest:
     Target Horizon: 5-Day Forward Return (Day Trading Strategy)
     """
     
-    def __init__(self, model_type: str = 'xgboost', retrain: bool = False, custom_model_path: str = None):
+    def __init__(self, model_type: str = 'xgboost', retrain: bool = False, custom_model_path: Optional[str] = None):
         """
         Args:
             model_type: 'xgboost'
@@ -271,7 +271,7 @@ class MLBacktest:
         keep_mask = ~noise_mask
 
         # Randomly pick 50% of noise to keep
-        if noise_mask.any():
+        if bool(noise_mask.any()):
             noise_indices = ret_combined[noise_mask].index
             keep_noise_indices = np.random.choice(
                 noise_indices,
@@ -354,7 +354,10 @@ class MLBacktest:
         if self.global_xgb:
             try:
                 prob = self.global_xgb.predict_latest(df)
-                return (prob - 0.5) * 2  # Convert to -1 to 1
+                # Handle both float and tuple returns
+                if isinstance(prob, tuple):
+                    prob = float(prob[1]) if len(prob) > 1 else float(prob[0])
+                return (float(prob) - 0.5) * 2  # Convert to -1 to 1
             except:
                 pass
         return 0.0
@@ -449,7 +452,10 @@ class MLBacktest:
                             
                             import xgboost as xgb
                             dmatrix = xgb.DMatrix(X_clean.values, feature_names=X_clean.columns.tolist())
-                            probs = self.global_xgb.model.get_booster().predict(dmatrix)
+                            if self.global_xgb.model is not None:
+                                probs = self.global_xgb.model.get_booster().predict(dmatrix)
+                            else:
+                                continue
                             
                             xgb_scores[ticker] = pd.Series((probs - 0.5) * 2, index=X.index)
                     except Exception as e:

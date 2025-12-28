@@ -2,18 +2,25 @@
 Position Manager Module
 Tracks open positions, pending orders, and position states
 """
-import pandas as pd
-import numpy as np
 import sqlite3
-import json
-from datetime import datetime, date
-from typing import Dict, List, Optional
+from datetime import date
+from typing import Dict, List, Optional, TypedDict
 from dataclasses import dataclass, asdict
 from enum import Enum
 import logging
 import os
 
 logger = logging.getLogger(__name__)
+
+
+class PositionUpdateResult(TypedDict, total=False):
+    """Result of updating a position."""
+    changed: bool
+    exit: bool
+    filled: bool
+    reason: str
+    pnl_pct: float
+    floating_pnl_pct: float
 
 
 class OrderType(Enum):
@@ -136,7 +143,7 @@ class PositionManager:
             ))
             
             conn.commit()
-            return cursor.lastrowid
+            return cursor.lastrowid or 0
     
     def get_open_positions(self) -> List[Position]:
         """Get all open/pending positions."""
@@ -176,10 +183,10 @@ class PositionManager:
         current_price: float,
         current_high: float,
         current_low: float
-    ) -> Optional[Dict]:
+    ) -> Optional[PositionUpdateResult]:
         """
         Update position status based on current price.
-        
+
         Returns exit signal if triggered.
         """
         with sqlite3.connect(self.db_path) as conn:
@@ -198,7 +205,7 @@ class PositionManager:
                 return None
             
             pos = dict(row)
-            result = {'changed': False, 'exit': False}
+            result: PositionUpdateResult = {'changed': False, 'exit': False}
             
             # Check limit order fill
             if pos['status'] == 'PENDING' and pos['order_type'] == 'LIMIT':
@@ -226,9 +233,10 @@ class PositionManager:
                     pnl_pct = (pos['stop_loss'] - entry) / entry * 100
                     pnl = pnl_pct / 100 * pos['position_value']
                     
+                    status_str = PositionStatus.HIT_STOP_LOSS.value
                     cursor.execute("""
-                        UPDATE positions SET 
-                            status = 'HIT_STOP_LOSS',
+                        UPDATE positions SET
+                            status = ?,
                             exit_date = ?,
                             exit_price = ?,
                             exit_reason = 'STOP_LOSS',
@@ -236,7 +244,7 @@ class PositionManager:
                             pnl_pct = ?,
                             updated_at = CURRENT_TIMESTAMP
                         WHERE id = ?
-                    """, (date.today().isoformat(), pos['stop_loss'], pnl, pnl_pct, pos['id']))
+                    """, (status_str, date.today().isoformat(), pos['stop_loss'], pnl, pnl_pct, pos['id']))
                     
                     result['exit'] = True
                     result['reason'] = 'HIT_STOP_LOSS'
@@ -247,9 +255,10 @@ class PositionManager:
                     pnl_pct = (pos['take_profit'] - entry) / entry * 100
                     pnl = pnl_pct / 100 * pos['position_value']
                     
+                    status_str = PositionStatus.HIT_TAKE_PROFIT.value
                     cursor.execute("""
-                        UPDATE positions SET 
-                            status = 'HIT_TAKE_PROFIT',
+                        UPDATE positions SET
+                            status = ?,
                             exit_date = ?,
                             exit_price = ?,
                             exit_reason = 'TAKE_PROFIT',
@@ -257,7 +266,7 @@ class PositionManager:
                             pnl_pct = ?,
                             updated_at = CURRENT_TIMESTAMP
                         WHERE id = ?
-                    """, (date.today().isoformat(), pos['take_profit'], pnl, pnl_pct, pos['id']))
+                    """, (status_str, date.today().isoformat(), pos['take_profit'], pnl, pnl_pct, pos['id']))
                     
                     result['exit'] = True
                     result['reason'] = 'HIT_TAKE_PROFIT'

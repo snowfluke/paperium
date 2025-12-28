@@ -5,7 +5,7 @@ Filters stocks for high potential candidates before detailed analysis
 import pandas as pd
 import numpy as np
 import logging
-from typing import Dict, List, Optional
+from typing import Dict, List
 
 logger = logging.getLogger(__name__)
 
@@ -97,8 +97,8 @@ class Screener:
             # We want stocks that move, not dead ones
             if 'atr' not in df.columns:
                 high_low = df['high'] - df['low']
-                high_close = np.abs(df['high'] - df['close'].shift())
-                low_close = np.abs(df['low'] - df['close'].shift())
+                high_close = pd.Series(np.abs(df['high'] - df['close'].shift()), index=df.index)
+                low_close = pd.Series(np.abs(df['low'] - df['close'].shift()), index=df.index)
                 tr = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
                 atr = tr.rolling(14).mean().iloc[-1]
             else:

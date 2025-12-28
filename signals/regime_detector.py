@@ -4,7 +4,7 @@ Classifies market conditions based on volatility of the IHSG index (^JKSE).
 """
 import pandas as pd
 import numpy as np
-from typing import Optional, Literal
+from typing import Optional
 from enum import Enum
 import logging
 
@@ -60,8 +60,7 @@ class RegimeDetector:
             Series of annualized volatility
         """
         safe_ratio = (prices / prices.shift(1)).replace([0, np.inf, -np.inf], np.nan).fillna(1.0)
-        log_returns = np.log(safe_ratio.abs())
-
+        log_returns = pd.Series(np.log(safe_ratio.abs()), index=safe_ratio.index)
 
         volatility = log_returns.rolling(self.volatility_window).std() * np.sqrt(252)
         return volatility
@@ -82,18 +81,33 @@ class RegimeDetector:
             return MarketRegime.NORMAL
         
         volatility = self.calculate_volatility(prices)
-        
+
+        # Determine the date to use for regime detection
         if current_date is None:
             current_date = prices.index[-1]
-        
-        # Get the volatility value at current_date
+
+        # Ensure current_date is in volatility index
         if current_date not in volatility.index:
             current_date = volatility.index[-1]
-        
-        current_vol = volatility.loc[current_date]
-        
+
+        # At this point, current_date is guaranteed to be a valid index
+        # Assert to help type checker understand current_date is not None
+        assert current_date is not None, "current_date should not be None after initialization"
+
+        # Get current volatility value
+        if current_date in volatility.index:
+            # Use .get() to avoid index type issues
+            current_vol_value = volatility.get(current_date)
+            current_vol = current_vol_value if current_vol_value is not None else volatility.iloc[-1]
+        else:
+            # Fallback to last value
+            current_vol = volatility.iloc[-1]
+
         # Get historical volatility for percentile calculation
-        historical_vol = volatility.loc[:current_date].tail(self.lookback_days)
+        try:
+            historical_vol = volatility.loc[:current_date].tail(self.lookback_days)
+        except (KeyError, TypeError):
+            historical_vol = volatility.tail(self.lookback_days)
         
         if len(historical_vol) < 10:
             return MarketRegime.NORMAL
@@ -121,7 +135,7 @@ class RegimeDetector:
         volatility = self.calculate_volatility(prices)
         regimes = []
         
-        for i, date in enumerate(volatility.index):
+        for i, _ in enumerate(volatility.index):
             if i < self.lookback_days + self.volatility_window:
                 regimes.append(MarketRegime.NORMAL)
                 continue

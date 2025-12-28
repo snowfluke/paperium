@@ -189,9 +189,9 @@ class DataFetcher:
                 threads=False, # Disable threading to fix the NoneType subscriptable error
                 progress=True
             )
-            
-            if df.empty:
-                logger.error("Batch download returned empty DataFrame")
+
+            if df is None or df.empty:
+                logger.error("Batch download returned empty or None DataFrame")
                 return pd.DataFrame()
             
             # Restructure the multi-level column DataFrame

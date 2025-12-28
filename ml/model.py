@@ -4,14 +4,14 @@ XGBoost-based prediction with daily self-refinement
 """
 import pandas as pd
 import numpy as np
-from typing import Dict, Optional, Tuple, List
+from typing import Dict, Optional, Tuple
 import pickle
 import os
 from datetime import datetime
 import logging
 
 from sklearn.model_selection import TimeSeriesSplit
-from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
+from sklearn.metrics import accuracy_score, precision_score
 import xgboost as xgb
 
 from .features import FeatureEngineer
@@ -112,7 +112,7 @@ class TradingModel:
             logger.info("Training fresh ML model...")
         
         # Create features
-        X, y = self.feature_engineer.create_features(df)
+        X, y, _ = self.feature_engineer.create_features(df)
         
         # Clean data (handle inf and nan)
         X = X.replace([np.inf, -np.inf], np.nan)
@@ -138,7 +138,8 @@ class TradingModel:
         else:
             # Incremental learning: pass booster to xgb_model
             # Note: Feature set must be identical
-            self.model.fit(X_train, y_train, xgb_model=base_model.get_booster())
+            if self.model is not None:
+                self.model.fit(X_train, y_train, xgb_model=base_model.get_booster())
         
         train_duration = time.time() - train_start
         self.last_trained = datetime.now()
@@ -193,9 +194,9 @@ class TradingModel:
             precisions.append(precision_score(y_val, y_pred, zero_division=0))
         
         return {
-            'cv_accuracy': np.mean(accuracies),
-            'cv_accuracy_std': np.std(accuracies),
-            'cv_precision': np.mean(precisions)
+            'cv_accuracy': float(np.mean(accuracies)),
+            'cv_accuracy_std': float(np.std(accuracies)),
+            'cv_precision': float(np.mean(precisions))
         }
     
     def daily_update(
@@ -250,8 +251,10 @@ class TradingModel:
         
         # Prepare features
         X = self.feature_engineer.prepare_inference_features(df)
-        
+
         # Align features with training features
+        if self.feature_names is None:
+            self.feature_names = []
         missing_features = set(self.feature_names) - set(X.columns)
         for f in missing_features:
             X[f] = 0

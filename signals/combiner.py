@@ -4,7 +4,7 @@ Combines multiple signal sources into a unified composite score
 """
 import pandas as pd
 import numpy as np
-from typing import Dict, Optional
+from typing import Dict, Optional, Union
 import logging
 
 from .technical import TechnicalIndicators
@@ -135,9 +135,11 @@ class SignalCombiner:
         score += self.weights['technical'] * tech_score
         
         # ML prediction score (if available)
-        if ml_predictions is not None and row.name in ml_predictions.index:
-            ml_score = (ml_predictions.loc[row.name] - 0.5) * 2  # Convert 0-1 to -1 to 1
-            score += self.weights['ml_prediction'] * ml_score
+        if ml_predictions is not None and row.name is not None:
+            ml_value = ml_predictions.get(row.name)
+            if ml_value is not None:
+                ml_score = (ml_value - 0.5) * 2  # Convert 0-1 to -1 to 1
+                score += self.weights['ml_prediction'] * ml_score
         
         return np.clip(score, -1, 1)
     

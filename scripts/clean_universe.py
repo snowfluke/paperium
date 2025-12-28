@@ -28,7 +28,7 @@ def clean_universe():
                 try:
                     ticker_data = None
                     if isinstance(data, pd.DataFrame):
-                        if ticker in data.columns.levels[0]:
+                        if isinstance(data.columns, pd.MultiIndex) and ticker in data.columns.levels[0]:
                             ticker_data = data[ticker].dropna()
                         else:
                             # Single ticker case if chunk size became 1
@@ -56,7 +56,7 @@ def clean_universe():
             try:
                 time.sleep(0.5) # Avoid rate limiting
                 ticker_df = yf.download(ticker, period="1mo", progress=False, timeout=10)
-                if not ticker_df.empty:
+                if ticker_df is not None and not ticker_df.empty:
                     latest_date = ticker_df.index[-1]
                     if latest_date >= cutoff_date:
                         active_stocks.append(ticker)

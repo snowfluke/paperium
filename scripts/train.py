@@ -118,12 +118,22 @@ def main():
             avg_loss = abs(results.get('avg_loss', 1))
             wl_ratio = avg_win / avg_loss if avg_loss > 0 else 0
 
-            # Gen 5 Combined Score (Fixed Formula)
-            # Target: WR ~90%, W/L ~1.8x should score ~90%
-            # Old formula was too harsh (0.4 WR + 0.6 W/L normalized)
-            # New: Equal weight, with W/L capped at 2.0 = 100%
-            wl_ratio_normalized = min(wl_ratio / 2.0, 1.0)
-            combined_score = (effective_wr * 0.5) + (wl_ratio_normalized * 0.5)
+            # Gen 5 Combined Score (Sophisticated Formula)
+            # Both high WR and high W/L are achievable (Gen 4 proved it: 89% WR + 1.79 W/L)
+            # Use multiplicative approach: both must be high for a high score
+            # This penalizes models that sacrifice one for the other
+
+            # Normalize both metrics to 0-1 scale
+            wr_score = effective_wr  # Already 0-1
+            wl_score = min(wl_ratio / 2.0, 1.0)  # Cap at 2.0 = perfect
+
+            # Geometric mean (sqrt of product) - both must be high
+            # This is more sophisticated than simple average
+            # Examples:
+            #   WR=90%, W/L=1.8x (90%) → sqrt(0.9 * 0.9) = 90%
+            #   WR=63%, W/L=2.2x (100%) → sqrt(0.63 * 1.0) = 79% (penalized!)
+            #   WR=50%, W/L=2.0x (100%) → sqrt(0.5 * 1.0) = 71% (heavily penalized!)
+            combined_score = (wr_score * wl_score) ** 0.5
             
             console.print(f"  Win Rate: [bold]{effective_wr:.1%}[/bold]")
             console.print(f"  W/L Ratio: [bold]{wl_ratio:.2f}x[/bold]")

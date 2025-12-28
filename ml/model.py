@@ -65,11 +65,10 @@ class TradingModel:
             'max_depth': self.max_depth,
             'learning_rate': self.learning_rate,
             'min_child_weight': self.min_child_weight,
-            'subsample': 0.7,
-            'colsample_bytree': 0.7,
-            'reg_alpha': 0.1,
-            'reg_lambda': 1.0,
-            'gamma': 0.1,
+            'subsample': 0.8,              # Gen 4 value (was 0.7 - too restrictive!)
+            'colsample_bytree': 0.8,       # Gen 4 value (was 0.7 - too restrictive!)
+            # Removed reg_alpha (was 0.1 - killing weak features!)
+            # Removed gamma (was 0.1 - preventing splits!)
             'objective': 'binary:logistic',
             'eval_metric': 'logloss',
             'random_state': 42,

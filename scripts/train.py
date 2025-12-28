@@ -98,15 +98,20 @@ def main():
     # Create backtester ONCE (outside loop) to preserve cache
     bt = MLBacktest(model_type='xgboost', retrain=True)
 
-    # Track best score for adaptive optimization
+    # Track best score and model for smart backtracking
     best_combined_score = 0.0
+    best_model = None  # Keep best model in memory
     stagnant_iterations = 0
 
     iteration = 0
     while iteration < args.max_iter:
         iteration += 1
         console.print(f"\n[bold magenta]Iteration {iteration}/{args.max_iter}[/bold magenta]")
-            
+
+        # Restore best model before training if we have one
+        if best_model is not None and iteration > 1:
+            bt.best_model_checkpoint = best_model  # Pass to backtester for warm start
+
         results = bt.run(start_date=start_date, end_date=end_date, train_window=train_window, pre_loaded_data=featured_data)
         
         if results and 'win_rate' in results:
@@ -139,17 +144,25 @@ def main():
             console.print(f"  W/L Ratio: [bold]{wl_ratio:.2f}x[/bold]")
             console.print(f"  [cyan]Combined Score: {combined_score:.1%}[/cyan]")
 
-            # Adaptive optimization based on performance
+            # Adaptive optimization with smart backtracking
             if combined_score > best_combined_score:
                 best_combined_score = combined_score
                 stagnant_iterations = 0
+
+                # Save this model as the new best checkpoint
+                import pickle
+                best_model = pickle.dumps(bt.global_xgb.model.get_booster())
+                console.print(f"  [green]✓ New best model! Checkpointed for warm start.[/green]")
+
                 # Model is improving - slightly tighten risk/reward (lower SL, higher TP)
                 if iteration > 1:
                     bt.stop_loss_pct = max(0.03, bt.stop_loss_pct - 0.005)  # Tighter stop
                     bt.take_profit_pct = min(0.10, bt.take_profit_pct + 0.005)  # Higher target
-                    console.print(f"  [green]→ Model improving! Adjusting next: SL={bt.stop_loss_pct:.1%}, TP={bt.take_profit_pct:.1%}[/green]")
+                    console.print(f"  [green]→ Adjusting next: SL={bt.stop_loss_pct:.1%}, TP={bt.take_profit_pct:.1%}[/green]")
             else:
                 stagnant_iterations += 1
+                console.print(f"  [yellow]→ No improvement. Will warm start from best checkpoint next iteration.[/yellow]")
+
                 # Model not improving - try different risk parameters
                 if stagnant_iterations >= 3:
                     # Reset to more conservative defaults

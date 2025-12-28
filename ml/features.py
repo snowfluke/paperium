@@ -120,8 +120,9 @@ class FeatureEngineer:
         # Legacy Volatility (std of log returns * sqrt(252))
         if 'log_return' not in df.columns:
             # Use small epsilon to avoid log(0) errors
-            ratio = (df['close'] / df['close'].shift(1)).replace(0, np.nan).fillna(1.0)
-            df['log_return'] = np.log(ratio)
+            ratio = (df['close'] / df['close'].shift(1)).replace([0, np.inf, -np.inf], np.nan).fillna(1.0)
+            df['log_return'] = np.log(ratio.abs())
+
         df['volatility'] = df['log_return'].rolling(20).std() * np.sqrt(252)
         
         return df
@@ -135,8 +136,9 @@ class FeatureEngineer:
         
         # Ensure log_return exists
         if 'log_return' not in df.columns:
-            ratio = (df['close'] / df['close'].shift(1)).replace(0, np.nan).fillna(1.0)
-            df['log_return'] = np.log(ratio)
+            ratio = (df['close'] / df['close'].shift(1)).replace([0, np.inf, -np.inf], np.nan).fillna(1.0)
+            df['log_return'] = np.log(ratio.abs())
+
 
         
         # Volatility

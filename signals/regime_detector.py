@@ -59,8 +59,9 @@ class RegimeDetector:
         Returns:
             Series of annualized volatility
         """
-        safe_ratio = (prices / prices.shift(1)).replace(0, np.nan).fillna(1.0)
-        log_returns = np.log(safe_ratio)
+        safe_ratio = (prices / prices.shift(1)).replace([0, np.inf, -np.inf], np.nan).fillna(1.0)
+        log_returns = np.log(safe_ratio.abs())
+
 
         volatility = log_returns.rolling(self.volatility_window).std() * np.sqrt(252)
         return volatility

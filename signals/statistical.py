@@ -126,8 +126,9 @@ class StatisticalSignals:
         df['return_20d'] = df['close'].pct_change(20)
         
         # Log returns (for statistical analysis)
-        ratio = (df['close'] / df['close'].shift(1)).replace(0, np.nan).fillna(1.0)
-        df['log_return'] = np.log(ratio)
+        ratio = (df['close'] / df['close'].shift(1)).replace([0, np.inf, -np.inf], np.nan).fillna(1.0)
+        df['log_return'] = np.log(ratio.abs())
+
 
         
         # Cumulative returns
@@ -306,7 +307,7 @@ class PairTrading:
         """
         # Log price ratio (spread) - Safe log
         ratio = (prices1 / prices2).replace([0, np.inf, -np.inf], np.nan).fillna(1.0)
-        spread = np.log(ratio)
+        spread = np.log(ratio.abs())
 
         
         # Rolling Z-score

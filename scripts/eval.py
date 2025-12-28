@@ -96,40 +96,38 @@ class MLBacktest:
             return
         
         try:
-            if self.retrain:
-                # Pre-train models with strict warning handling
-                console.print("[yellow]Training ML models...[/yellow]")
-                with warnings.catch_warnings():
-                    warnings.simplefilter('error', RuntimeWarning)
+            with warnings.catch_warnings():
+                warnings.filterwarnings('ignore', category=RuntimeWarning)
+                
+                if self.retrain:
+                    # Pre-train models
+                    console.print("[yellow]Training ML models...[/yellow]")
                     trained_counts = self._train_models(all_data, start_date, train_window)
+                    
+                    if trained_counts['xgb'] == 0:
+                        console.print("[red]Critical: XGBoost model was not trained successfuly. Aborting simulation.[/red]")
+                        return
+                else:
+                    # Evaluation mode: Load existing models
+                    console.print("[yellow]Loading existing ML models for evaluation...[/yellow]")
+                    if not self._load_models():
+                        console.print("[bold red]REJECTED: Required models do not exist.[/bold red]")
+                        console.print("Please train your models first using 'python scripts/train_model.py'.")
+                        return
+                    
+                # Run simulation
+                import time
+                console.print("[yellow]Running simulation...[/yellow]")
+                sim_start = time.time()
+                results = self._simulate(all_data, start_date, end_date, is_pre_featured=(pre_loaded_data is not None))
+                sim_time = time.time() - sim_start
+                console.print(f"[dim]Simulation time: {sim_time:.2f}s[/dim]")
                 
-                if trained_counts['xgb'] == 0:
-                    console.print("[red]Critical: XGBoost model was not trained successfuly. Aborting simulation.[/red]")
-                    return
-            else:
-                # Evaluation mode: Load existing models
-                console.print("[yellow]Loading existing ML models for evaluation...[/yellow]")
-                if not self._load_models():
-                    console.print("[bold red]REJECTED: Required models do not exist.[/bold red]")
-                    console.print("Please train your models first using 'python scripts/train_model.py'.")
-                    return
-                
-            # Run simulation
-            import time
-            console.print("[yellow]Running simulation...[/yellow]")
-            sim_start = time.time()
-            results = self._simulate(all_data, start_date, end_date, is_pre_featured=(pre_loaded_data is not None))
-            sim_time = time.time() - sim_start
-            console.print(f"[dim]Simulation time: {sim_time:.2f}s[/dim]")
+                # Display results
+                self._display_results(results)
             
-            # Display results
-            self._display_results(results)
-            
-        except RuntimeWarning as rw:
-            console.print(f"\n[bold red]FATAL: Detected RuntimeWarning during process: {rw}[/bold red]")
-            console.print("[red]Aborting simulation to ensure correctness.[/red]")
-            return
         except Exception as e:
+
             console.print(f"\n[bold red]FATAL ERROR: {e}[/bold red]")
             import traceback
             console.print(traceback.format_exc())

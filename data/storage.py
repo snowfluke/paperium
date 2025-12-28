@@ -196,7 +196,8 @@ class DataStorage:
         Returns:
             DataFrame with price data
         """
-        query = "SELECT date, ticker, open, high, low, close, volume FROM prices WHERE 1=1"
+        query = "SELECT date, ticker, open, high, low, close, volume FROM prices WHERE close > 0"
+
         params = []
         
         if tickers:

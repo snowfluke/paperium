@@ -21,7 +21,15 @@ from rich.console import Console
 from rich.table import Table
 from rich.panel import Panel
 from rich import box
-from rich.progress import Progress
+from rich.progress import (
+    Progress,
+    TextColumn,
+    BarColumn,
+    TaskProgressColumn,
+    TimeRemainingColumn,
+    MofNCompleteColumn
+)
+
 
 from config import config
 from data.storage import DataStorage
@@ -335,13 +343,22 @@ class MLBacktest:
             ticker_groups = all_data.groupby('ticker')
             processed_data_list = []
             
-            with Progress(console=console) as progress:
+            with Progress(
+                TextColumn("[progress.description]{task.description}"),
+                BarColumn(),
+                TaskProgressColumn(),
+                MofNCompleteColumn(),
+                TextColumn("•"),
+                TimeRemainingColumn(),
+                console=console
+            ) as progress:
                 task = progress.add_task("[cyan]Processing tickers...", total=all_data['ticker'].nunique())
                 for ticker, group in ticker_groups:
                     group = group.sort_values('date')
                     group = self._add_features(group)
                     processed_data_list.append(group)
                     progress.update(task, advance=1)
+
             
             all_data_feat = pd.concat(processed_data_list).sort_values(['date', 'ticker'])
         else:
@@ -355,41 +372,54 @@ class MLBacktest:
             (all_data_feat['date'] >= start) & (all_data_feat['date'] <= end)
         ]['date'].unique())
         
-        # Pre-calculate batch scores for ML models (XGBoost and GD part)
+        # Pre-calculate batch scores for ML models
         console.print("[yellow]Batch predicting ML scores for all tickers...[/yellow]")
         xgb_scores = {}  # ticker -> Series of scores
         
-        for ticker, ticker_df_indexed in ticker_data_map.items():
-            ticker_df = ticker_df_indexed.reset_index() # Need original df for feature engineer
-            # XGBoost Batch
-            if self.global_xgb:
-                try:
-                    # Use prepare_inference_features for prediction to avoid dropping any rows
-                    X = self.global_xgb.feature_engineer.prepare_inference_features(ticker_df)
-                    # Align X's index with the original ticker_df's date index for lookup
-                    X.index = ticker_df['date']
-                    
-                    if not X.empty:
-                        # Ensure features match model's expected features
-                        if self.global_xgb.feature_names:
-                            missing = set(self.global_xgb.feature_names) - set(X.columns)
-                            for f in missing: X[f] = 0
-                            X = X[self.global_xgb.feature_names]
+        with Progress(
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            TaskProgressColumn(),
+            MofNCompleteColumn(),
+            TextColumn("•"),
+            TimeRemainingColumn(),
+            console=console
+        ) as progress:
+            task = progress.add_task("[cyan]Predicting...", total=len(ticker_data_map))
+            for ticker, ticker_df_indexed in ticker_data_map.items():
+                ticker_df = ticker_df_indexed.reset_index() # Need original df for feature engineer
+                # XGBoost Batch
+                if self.global_xgb:
+                    try:
+                        # Use prepare_inference_features for prediction to avoid dropping any rows
+                        X = self.global_xgb.feature_engineer.prepare_inference_features(ticker_df)
+                        # Align X's index with the original ticker_df's date index for lookup
+                        X.index = ticker_df['date']
                         
-                        # Critical: Clean data for GPU backend (stricter validation)
-                        # Replace inf with nan, then fill with 0
-                        X_clean = X.replace([np.inf, -np.inf], np.nan).fillna(0)
-                        
-                        # Ensure float32 for GPU efficiency
-                        X_clean = X_clean.astype(np.float32)
-                        
-                        import xgboost as xgb
-                        dmatrix = xgb.DMatrix(X_clean.values, feature_names=X_clean.columns.tolist())
-                        probs = self.global_xgb.model.get_booster().predict(dmatrix)
-                        
-                        xgb_scores[ticker] = pd.Series((probs - 0.5) * 2, index=X.index)
-                except Exception as e:
-                    console.print(f"  [red]✗[/red] XGBoost batch prediction failed for {ticker}: {e}")
+                        if not X.empty:
+                            # Ensure features match model's expected features
+                            if self.global_xgb.feature_names:
+                                missing = set(self.global_xgb.feature_names) - set(X.columns)
+                                for f in missing: X[f] = 0
+                                X = X[self.global_xgb.feature_names]
+                            
+                            # Critical: Clean data for GPU backend (stricter validation)
+                            # Replace inf with nan, then fill with 0
+                            X_clean = X.replace([np.inf, -np.inf], np.nan).fillna(0)
+                            
+                            # Ensure float32 for GPU efficiency
+                            X_clean = X_clean.astype(np.float32)
+                            
+                            import xgboost as xgb
+                            dmatrix = xgb.DMatrix(X_clean.values, feature_names=X_clean.columns.tolist())
+                            probs = self.global_xgb.model.get_booster().predict(dmatrix)
+                            
+                            xgb_scores[ticker] = pd.Series((probs - 0.5) * 2, index=X.index)
+                    except Exception as e:
+                        console.print(f"  [red]✗[/red] XGBoost batch prediction failed for {ticker}: {e}")
+                
+                progress.update(task, advance=1)
+
         
         # Log prediction stats
         all_xgb = pd.concat(xgb_scores.values()) if xgb_scores else pd.Series()
@@ -410,8 +440,17 @@ class MLBacktest:
         equity_curve = []
         max_seen_score = -1.0
         
-        with Progress(console=console) as progress:
+        with Progress(
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            TaskProgressColumn(),
+            MofNCompleteColumn(),
+            TextColumn("•"),
+            TimeRemainingColumn(),
+            console=console
+        ) as progress:
             task = progress.add_task("[cyan]Simulating...", total=len(all_dates))
+
             
             for date in all_dates:
                 day_data = all_data_feat[all_data_feat['date'] == date]

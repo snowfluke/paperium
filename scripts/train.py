@@ -79,7 +79,15 @@ def main():
     # Phase 0: Data Prep
     backtester = MLBacktest()
     end_date = datetime.now().strftime('%Y-%m-%d')
-    start_date = (datetime.now() - timedelta(days=eval_days)).strftime('%Y-%m-%d')
+
+    # When using 'max', align to month boundaries for cleaner evaluation
+    if args.days == 'max':
+        # Start from December 1st of the previous year
+        current_year = datetime.now().year
+        start_date = f"{current_year - 1}-12-01"
+        console.print(f"[dim]Eval period aligned to: {start_date} to {end_date}[/dim]")
+    else:
+        start_date = (datetime.now() - timedelta(days=eval_days)).strftime('%Y-%m-%d')
     
     all_data = backtester._load_data(start_date, end_date, train_window=train_window)
     if all_data.empty:
@@ -124,7 +132,6 @@ def main():
             
             console.print(f"  Win Rate: [bold]{effective_wr:.1%}[/bold]")
             console.print(f"  W/L Ratio: [bold]{wl_ratio:.2f}x[/bold]")
-            console.print(f"  [cyan]Combined Score: {combined_score:.1%}[/cyan]")
 
             # Gen 4 approach: Simple, no complex optimization
             # Just train fresh models and pick the best one

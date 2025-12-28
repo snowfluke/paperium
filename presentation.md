@@ -1,8 +1,8 @@
-# Building an XGBoost Trading System for IHSG: A Technical Deep Dive
+# Building an XGBoost Trading System for IHSG
 
 This document explains the exact technical implementation of Paperium, an automated trading system for the Indonesia Stock Exchange, from data ingestion to live signal generation.
 
-## Data Foundation: SQLite Storage and 5-Year Lookback
+## Data Foundation:
 
 The system starts by ingesting OHLCV (Open, High, Low, Close, Volume) data from Yahoo Finance for 956 tickers in the IHSG universe. Historical data spans 5 years (`lookback_days: 1825`) and is stored in a SQLite database at `data/ihsg_trading.db`. The universe includes liquid stocks from IDX80, Kompas100, and growth sectors.
 
@@ -15,13 +15,14 @@ min_data_points: int = 100
 
 Data fetching happens via `DataStorage.get_prices()`, which queries the database and returns a pandas DataFrame sorted by ticker and date.
 
-## Feature Engineering: 46 Hardcoded Features
+## Feature Engineering
 
-The model requires **exactly 46 features** in a specific order, defined in [`features.py:22-33`](file:///Users/vexeee/Documents/project/paperium/ml/features.py#L22-L33). This is the LEGACY_46_FEATURES array that the champion model expects.
+The model requires **exactly 46 features** in a specific order, defined in [`features.py:22-33`](ml/features.py#L22-L33). This is the LEGACY_46_FEATURES array that the champion model expects.
 
 ### Feature Categories
 
 **1. Price Returns (10 features)**
+
 ```python
 # features.py:130-132
 for lag in [1, 2, 3, 5, 10, 20]:
@@ -31,6 +32,7 @@ df['log_return'] = np.log(df['close'] / df['close'].shift(1))
 ```
 
 **2. Volatility Metrics (5 features)**
+
 ```python
 # features.py:123, 139-141
 df['volatility'] = df['log_return'].rolling(20).std() * np.sqrt(252)
@@ -48,6 +50,7 @@ The volatility z-score formula:
 $$Z_\sigma = \frac{\sigma_{20d} - \mu_{60}(\sigma)}{\text{std}_{60}(\sigma)}$$
 
 **3. Moving Average Relationships (3 features)**
+
 ```python
 # features.py:144-146
 for period in [10, 20, 50]:
@@ -56,6 +59,7 @@ for period in [10, 20, 50]:
 ```
 
 **4. Technical Indicators (RSI, MACD, ATR) - 7 features**
+
 ```python
 # technical.py:80-89 - RSI Implementation
 delta = df['close'].diff()
@@ -82,6 +86,7 @@ df['atr'] = tr.rolling(window=14).mean()
 ```
 
 **5. Volume Features (4 features)**
+
 ```python
 # features.py:117-118, 159-161
 df['volume_sma'] = df['volume'].rolling(window=20).mean()
@@ -91,6 +96,7 @@ df['relative_volume'] = df['volume'] / df['volume_ma20'].replace(0, 1)
 ```
 
 **6. Lagged Features (7 features)**
+
 ```python
 # features.py:182-189
 for lag in [1, 2, 3, 5]:
@@ -101,6 +107,7 @@ df['rsi_change'] = df['rsi'] - df['rsi'].shift(1)
 ```
 
 **7. Calendar Features (5 features - dow_0 through dow_4)**
+
 ```python
 # features.py:204-213
 df['date'] = pd.to_datetime(df['date'])
@@ -112,6 +119,7 @@ for day in range(5):  # Mon-Fri
 ```
 
 **8. Intraday Patterns (5 features)**
+
 ```python
 # features.py:149-156, 171, 174-175
 df['hl_range'] = (df['high'] - df['low']) / df['close']
@@ -133,10 +141,9 @@ df['target'] = df['close'].shift(-5) / df['close'] - 1
 df['target_direction'] = (df['target'] > 0).astype(int)
 ```
 
-The model predicts whether the stock will be profitable 5 days into the future (binary classification: 1 = up, 0 = down/flat). The choice of 5 days aligns with the `max_holding_days` exit rule in backtesting ([`config.py:540`](file:///Users/vexeee/Documents/project/paperium/config.py#L540)).
+The model predicts whether the stock will be profitable 5 days into the future (binary classification: 1 = up, 0 = down/flat). The choice of 5 days aligns with the `max_holding_days` exit rule in backtesting ([`config.py:540`](config.py#L540)).
 
 Rather than training individual models per ticker, Paperium uses a **single global model** trained on pooled data from all 956 tickers. This approach increases training samples and allows the model to learn cross-sectional patterns.
-
 
 ### Model Hyperparameters
 
@@ -156,11 +163,12 @@ xgb.XGBClassifier(
 )
 ```
 
-### Training Pipeline: Rolling Window + Noise Filtering
+### Training Pipeline
 
-The training process happens in [`eval.py:177-306`](file:///Users/vexeee/Documents/project/paperium/scripts/eval.py#L177-L306):
+The training process happens in [`eval.py:177-306`](scripts/eval.py#L177-L306):
 
 **Step 1: Data Pooling**
+
 ```python
 # eval.py:188-210
 for ticker in all_data['ticker'].unique():
@@ -174,6 +182,7 @@ for ticker in all_data['ticker'].unique():
 Each ticker contributes up to 252 trading days (1 year) of historical data.
 
 **Step 2: Noise Downsampling**
+
 ```python
 # eval.py:225-242
 noise_mask = (ret_combined.abs() < 0.005)  # Days with <0.5% price change
@@ -184,6 +193,7 @@ keep_noise_indices = np.random.choice(noise_indices, size=len(noise_indices) // 
 50% of "boring" days (where the stock moved less than 0.5%) are randomly discarded. This prevents the model from learning that "no movement" is the default prediction.
 
 **Step 3: Magnitude Weighting**
+
 ```python
 # eval.py:244-246
 sample_weights = 1.0 + (ret_combined.abs() * 10.0)
@@ -194,24 +204,18 @@ $$w = 1.0 + |r| \times 10$$
 
 where $r$ is the forward return.
 
-**Step 4: Warm Start (Incremental Learning)**
-```python
-# eval.py:260-291
-base_model = None
-if os.path.exists(xgb_champ_path):
-    temp_xgb.load(xgb_champ_path)
-    if temp_xgb.feature_names == new_features:
-        base_model = temp_xgb.model
+**Step 4: Fresh Training**
 
-if base_model is not None:
-    self.global_xgb.model.fit(X_combined, y_combined, sample_weight=sample_weights, xgb_model=base_model.get_booster())
-else:
-    self.global_xgb.model.fit(X_combined, y_combined, sample_weight=sample_weights)
+```python
+# eval.py:305-315
+# Always train fresh - each iteration is independent
+self.global_xgb.model = self.global_xgb._create_model()
+self.global_xgb.model.fit(X_combined, y_combined, sample_weight=sample_weights)
 ```
 
-If an existing champion model exists, the new model continues training from that checkpoint (warm start). This preserves learned patterns while adapting to new data.
+Each iteration trains a completely fresh model, allowing XGBoost's inherent randomness to explore different solution spaces without anchoring to previous iterations.
 
-## Prediction: Probability to Score Conversion
+## Prediction
 
 ```python
 # eval.py:308-316
@@ -224,20 +228,22 @@ def predict_latest(df):
     y_proba = self.model.predict_proba(X)[:, 1]  # P(class=1)
 ```
 
-XGBoost outputs a probability between 0 and 1. This is transformed to a score between -1 (bearish) and +1 (bullish). A score > 0.1 triggers a buy signal ([`eval.py:477`](file:///Users/vexeee/Documents/project/paperium/scripts/eval.py#L477)).
+XGBoost outputs a probability between 0 and 1. This is transformed to a score between -1 (bearish) and +1 (bullish). A score > 0.1 triggers a buy signal ([`eval.py:477`](scripts/eval.py#L477)).
 
 ## Screening: Pre-ML Filters
 
-Before scoring with XGBoost, stocks must pass liquidity and quality filters in [`screener.py`](file:///Users/vexeee/Documents/project/paperium/signals/screener.py):
+Before scoring with XGBoost, stocks must pass liquidity and quality filters in [`screener.py`](signals/screener.py):
 
 ```python
-# screener.py - Applied in eval.py:466
+# screener.py - Applied in eval.py:580
 if len(ticker_hist) < 200:
     continue  # Need at least 200 days of data
 
-if latest['close'] < 200 or avg_vol < 2_000_000 or (avg_vol * latest['close']) < 2_000_000_000:
-    continue  # Tightened Gen 5 Liquidity Filters (Price > 200, Vol > 2M, Value > 2B)
+if latest['close'] < 50 or avg_vol < 1_000_000:
+    continue  # Liquidity Filters (Price > 50, Vol > 1M)
 
+if latest['close'] < ema200 or current_rsi < 50:
+    continue  # Trend and momentum filters
 ```
 
 Only stocks passing the screener get ML predictions.
@@ -257,15 +263,18 @@ take_profit = entry_price * (1 + max(0.08, atr / entry_price * 3))
 ```
 
 Position sizing:
+
 - Each position = 10-12% of portfolio
 - Maximum 10 concurrent positions
 - Maximum 3 positions per sector
 
 Stop-loss and take-profit are **dynamic**, based on ATR (Average True Range):
-- Stop Loss = entry price * (1 - max(5%, 2×ATR%))
-- Take Profit = entry price * (1 + max(8%, 3×ATR%))
+
+- Stop Loss = entry price \* (1 - max(5%, 2×ATR%))
+- Take Profit = entry price \* (1 + max(8%, 3×ATR%))
 
 Time-based exit:
+
 ```python
 # eval.py:436-446
 if pos['days_held'] >= 5:
@@ -275,25 +284,25 @@ if pos['days_held'] >= 5:
 
 After 5 days, positions are automatically closed regardless of profit/loss.
 
-## Iterative Training: Target-Based Optimization
+## Iterative Training
 
-The [`train.py`](file:///Users/vexeee/Documents/project/paperium/scripts/train.py) script implements iterative optimization to hit a target win rate:
+The [`train.py`](scripts/train.py) script implements iterative optimization to hit a target win rate:
 
 ```python
 # train.py:86-138
 while iteration < max_iter:
     iteration += 1
-    
+
     bt = MLBacktest(model_type='xgboost', retrain=True)
     if iteration > 1:
         bt.stop_loss_pct = 0.03 + (iteration * 0.005)
         bt.take_profit_pct = 0.06 - (iteration * 0.005)
-    
+
     results = bt.run(start_date=start_date, end_date=end_date, train_window=train_window)
-    
+
     monthly_wrs = [m['win_rate'] / 100.0 for m in results['monthly_metrics']]
     effective_wr = (sum(monthly_wrs) / len(monthly_wrs) * 0.7) + (min(monthly_wrs) * 0.3)
-    
+
     if effective_wr >= target:
         bt.global_xgb.save("models/global_xgb_champion.pkl")
         break
@@ -304,33 +313,32 @@ $$WR_{\text{eff}} = 0.7 \times \overline{WR}_{\text{monthly}} + 0.3 \times \min(
 
 This penalizes models with inconsistent performance. A model that wins 90% in some months but 40% in others will score lower than a model with consistent 70% wins.
 
-### Gen-5 Optimization: Combined Score (2024-12-27)
+### Training Optimization Strategy
 
-Starting from Gen-5, the training target shifted from pure win rate to a **combined score** that prioritizes trade quality:
+The system uses a **simple, effective approach** focused on Win Rate as the primary metric.
 
-**Combined Score Formula:**
-$$S_{\text{combined}} = 0.4 \times WR_{\text{eff}} + 0.6 \times \min\left(\frac{W/L}{2.5}, 1.0\right)$$
+**Training Target:**
+$$S_{\text{target}} = WR_{\text{eff}}$$
 
-Where Win/Loss (W/L) ratio is:
-$$\frac{W}{L} = \frac{|\text{Avg Win}|}{|\text{Avg Loss}|}$$
+Where effective win rate is:
+$$WR_{\text{eff}} = 0.7 \times \overline{WR}_{\text{monthly}} + 0.3 \times \min(WR_{\text{monthly}})$$
 
-**Rationale**: High win rate alone doesn't guarantee profitability. A model with 90% win rate but 1.5x W/L ratio (small wins, large losses) will underperform a model with 85% win rate and 2.5x W/L ratio (larger wins relative to losses).
+**Core Training Principles:**
 
-**Iteration Parameters (Gen-5):**
-- Iteration 1: SL/TP from config (Defaults: 5% / 8%)
-- Iteration 2+: Iterative tuning of risk parameters to maximize PnL gain.
-- Parameters: Depth 5, Estimators 100 (Stable Gen 5 Specs)
+1. **Fresh training** - Each iteration trains independently, no warm start during optimization
+2. **Pure Win Rate focus** - W/L ratio naturally follows when win rate is high
+3. **Simple risk parameters** - Fixed SL=5%, TP=8% (no dynamic tuning)
+4. **XGBoost randomness** - Subsample and colsample provide natural exploration
+5. **Balanced regularization** - Subsample 0.8, colsample 0.8, no additional penalties
 
+**Why Simplicity Wins:**
 
+- Avoids optimization degradation (no negative parameters, no local minimum anchoring)
+- XGBoost's inherent stochasticity explores solution space effectively
+- Fewer hyperparameters = fewer failure modes
+- Reproducible and stable across iterations
 
-
-**Note on Hyperparameters:**
-We have standardized on **Max Depth 5** and **100 Estimators** for Gen-5. This provides a balanced model capacity that prevents overfitting while still extracting meaningful alpha from the expanded 956-ticker dataset (over 1M records), directly targeting higher Win Rates and better Win/Loss ratios.
-
-
-
-
-## Daily Operations: Morning Signals
+## Daily Operations
 
 ```python
 # scripts/morning_signals.py execution flow:
@@ -346,77 +354,44 @@ We have standardized on **Max Depth 5** and **100 Estimators** for Gen-5. This p
 
 The model runs every morning before market open, generating fresh signals based on yesterday's closing data. No human intervention required.
 
-## Model Evolution Analysis (4-Generation Comparison)
+### Design Principles
 
-On 2024-12-27, all 4 model generations (Gen-1 through Gen-4) were backtested over the same period (2024-12-01 to 2025-12-27) to understand performance evolution and identify the paradox of "high win rate, low profitability."
+**What Works:**
 
-### Backtest Results Summary
+1. ✅ **Pure Win Rate focus** - W/L ratio follows naturally when win rate is high
+2. ✅ **Fixed risk parameters** - Simple 5% SL / 8% TP defaults
+3. ✅ **Fresh training** - Each iteration explores independently via randomness
+4. ✅ **Balanced regularization** - Subsample 0.8, colsample 0.8, no additional penalties
+5. ✅ **Practical screening** - Filters for liquidity (price > 50, volume > 1M) without over-restricting
 
-| Generation | Win Rate | Total Return | Sharpe | Sortino | Max DD | Trades | Avg Win | Avg Loss | W/L Ratio |
-|------------|----------|--------------|--------|---------|--------|--------|---------|----------|-----------|
-| Gen-1      | 89.8%    | 412.3%       | 17.54  | 23.64   | -2.1%  | 695    | +7.6%   | -4.2%    | **1.81x** |
-| Gen-2      | 88.8%    | 407.1%       | 16.84  | 28.70   | -1.4%  | 704    | +7.5%   | -3.8%    | **1.97x** ✅ |
-| Gen-3      | 89.8%    | 413.6%       | 16.66  | 29.72   | -1.3%  | 703    | +7.5%   | -3.9%    | **1.92x** |
-| Gen-4      | 89.4%    | **417.9%** ✅ | **17.64** ✅ | **58.72** ✅ | **-0.7%** ✅ | 699    | +7.7%   | -4.3%    | **1.79x** |
+**What to Avoid:**
 
-### Key Findings
+1. ❌ **Complex scoring formulas** - Can be gamed, lead to unexpected behavior
+2. ❌ **Adaptive parameter optimization** - Often degrades over iterations
+3. ❌ **Warm start during training** - Can anchor to local minima
+4. ❌ **Aggressive regularization** - Prevents model from learning patterns
+5. ❌ **Overly strict screening** - Filters out tradeable opportunities
 
-**1. All Models Are Remarkably Similar**
-- Win rate variance: 88.8% to 89.8% (only 1% spread)
-- Return variance: 407% to 418% (only 3% spread)
-- Root cause: Gen-2, Gen-3, Gen-4 all use **46 features** (same feature set), Gen-1 uses 43 features (similar core features overlap)
-- All trained with same hyperparameters (100 trees, depth 5, lr 0.1)
+**Philosophy:**
+Simple, reproducible strategies outperform complex optimization. Let XGBoost's inherent randomness do the exploration.
 
-**2. Gen-4 is the Best Overall Model**
-- ✅ Highest total return (417.9%)
-- ✅ Best Sharpe ratio (17.64) - best risk-adjusted returns
-- ✅ Best Sortino ratio (58.72) - **2x better** than others at avoiding downside volatility
-- ✅ Lowest max drawdown (-0.7%) - safest, most stable
-- ⚠️ Lowest Win/Loss ratio (1.79x) - only weakness
+## Summary
 
-**3. The "High Win Rate, Low Profitability" Paradox Was Misunderstood**
-- Original concern: "Gen-4 has 92.64% metadata win rate but high avg PnL loss"
-- **Reality**: Gen-4 doesn't have high PnL loss - it has the **best total return**
-- The 92.64% metadata win rate was from a **different evaluation period/window**, not comparable to the 2024-12 to 2025-12 backtest
-- Gen-4's avg loss (-4.3%) is offset by larger avg wins (+7.7%) and high win rate (89.4%)
-
-**4. Gen-2 Has Best Trade Quality**
-- Best Win/Loss ratio (1.97x) despite lower overall returns
-- Tighter avg losses (-3.8% vs Gen-4's -4.3%)
-- This suggests better trade selection or risk management
-
-### Strategy for Gen-5
-
-Based on this analysis, Gen-5 optimization targets:
-1. **Warm start from Gen-4** - best foundation (Sharpe 17.64, Sortino 58.72)
-2. **Target Win/Loss ratio improvement** - from 1.79x to 2.2x+ (Gen 4 weakness was low W/L ratio; Gen 2 was historical best at 1.97x)
-3. **Maintain Gen-4's stability** - keep low drawdown and high Sortino.
-4. **Stable Specs** - Depth 5 and 100 estimators to ensure reliable generalization.
-
-5. **Combined Score Focus** - 40% win rate + 60% W/L ratio (prioritize absolute PnL quality).
-6. **Tighten screening** - Price > 200, Volume > 2M, Value > 2B to filter high-noise tickers.
-
-
-
-Expected Gen-5 results: 420%+ return, 2.2x+ W/L ratio, Sortino > 60, max drawdown < 1%.
-
-
-## Summary: The Complete Pipeline
-
-1. **Data**: 956 IHSG tickers, 5 years of OHLCV data in SQLite
-
+1. **Data**: 955 IHSG tickers, 5 years of OHLCV data in SQLite
 2. **Features**: 46 hardcoded features (returns, volatility, technical indicators, volume, calendar)
 3. **Target**: 5-day forward return direction (binary classification)
-4. **Model**: Single global XGBoost with 100 trees, depth 5, learning rate 0.1 (Gen-5 Stable)
-
-
-
-5. **Training**: Pooled data from all tickers, noise filtering (50% removal), magnitude weighting (w = 1 + |r|×10), warm start from previous champion
+4. **Model**: Single global XGBoost with 100 trees, depth 5, learning rate 0.1, subsample 0.8
+5. **Training**: Pooled data from all tickers, noise filtering (50% removal), magnitude weighting (w = 1 + |r|×10), fresh training each iteration
 6. **Prediction**: Probability → Score [-1, 1], threshold > 0.1 for buy
 7. **Risk**: ATR-based stops, 10% position size, 5-day max hold, 10 max positions
-8. **Optimization**: Combined score targeting (0.4×WR + 0.6×W/L ratio) with iterative tuning (SL: 4%→8%, TP: 5%→1%)
-
+8. **Optimization**: Pure Win Rate targeting, fixed SL/TP (5%/8%), simple iteration
 9. **Production**: Automated morning signals, model self-updates end-of-day
-10. **Evolution**: 4 generations analyzed, Gen-5 warm-starting from Gen-4 with W/L ratio focus
+
+**Core Philosophy**:
+
+- Keep it simple - complexity introduces failure modes
+- Let randomness handle exploration
+- Focus on Win Rate - profitability follows naturally
+- Fresh training each iteration prevents anchoring
 
 Every component is deterministic and reproducible. No discretionary decisions, no manual overrides.

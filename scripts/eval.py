@@ -88,9 +88,6 @@ class MLBacktest:
 
         # Cache for pooled training data (avoids re-pooling on each iteration)
         self.pooled_train_data: Optional[Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]] = None
-
-        # Smart backtracking: checkpoint from training script
-        self.best_model_checkpoint = None
     
     def run(self, start_date: str, end_date: str, train_window: int = 252, pre_loaded_data: Optional[pd.DataFrame] = None):
         """
@@ -303,61 +300,19 @@ class MLBacktest:
                 self.global_xgb = TradingModel(config.ml)
                 self.global_xgb.feature_names = X_combined.columns.tolist()
                 
-                # Smart Backtracking Strategy:
-                # - Iteration 1: Load champion from disk (if exists)
-                # - Iteration N: Warm start from best checkpoint (if improvement happened)
-                # - If no improvement: warm start from last good checkpoint (backtrack)
-
-                base_model = None
-
-                # Check for in-memory checkpoint first (from training script)
-                if self.best_model_checkpoint is not None:
-                    try:
-                        import pickle
-                        base_model = pickle.loads(self.best_model_checkpoint)  # Load full sklearn model
-                        log(f"  → Warm starting from best checkpoint")
-                    except Exception as e:
-                        log(f"  [yellow]→ Could not load checkpoint: {e}[/yellow]")
-
-                # Fallback: Load champion from disk (iteration 1 only)
-                elif self.pooled_train_data is None:  # First call
-                    xgb_champ_path = os.path.join("models", "global_xgb_champion.pkl")
-                    if os.path.exists(xgb_champ_path):
-                        try:
-                            temp_xgb = TradingModel(config.ml)
-                            temp_xgb.load(xgb_champ_path)
-                            if temp_xgb.model is not None:
-                                # Check feature compatibility
-                                old_features = set(temp_xgb.feature_names) if temp_xgb.feature_names else set()
-                                new_features = set(X_combined.columns.tolist())
-
-                                if old_features == new_features:
-                                    base_model = temp_xgb.model
-                                    log(f"  → Loaded champion from disk (iteration 1)")
-                                else:
-                                    log(f"  [yellow]→ Feature mismatch. Training fresh.[/yellow]")
-                        except Exception as load_err:
-                            log(f"  [yellow]→ Could not load champion: {load_err}[/yellow]")
-
+                # Gen 4 Strategy: Always train fresh
+                # Each iteration is independent, randomness explores different solutions
                 self.global_xgb.model = self.global_xgb._create_model()
                 # Remove deprecated param
                 if 'use_label_encoder' in self.global_xgb.model.get_params():
                     self.global_xgb.model.set_params(use_label_encoder=False)
 
                 train_start = time.time()
-                if base_model is not None:
-                    # Warm start from checkpoint or champion
-                    self.global_xgb.model.fit(
-                        X_combined, y_combined,
-                        sample_weight=sample_weights,
-                        xgb_model=base_model.get_booster() if hasattr(base_model, 'get_booster') else base_model
-                    )
-                else:
-                    # Fresh training (no checkpoint/champion available)
-                    self.global_xgb.model.fit(
-                        X_combined, y_combined,
-                        sample_weight=sample_weights
-                    )
+                # Fresh training with sample weights
+                self.global_xgb.model.fit(
+                    X_combined, y_combined,
+                    sample_weight=sample_weights
+                )
                 train_time = time.time() - train_start
                 log(f"  [green]✓ Trained Global XGBoost model in {train_time:.2f}s[/green]")
             except Exception as e:

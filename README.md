@@ -69,8 +69,37 @@ Train the global XGBoost model using historical data:
 # Targeted training (90 days eval)
 uv run python scripts/train.py --days 90 --target 0.85
 
-# Max window training (using 3 years of data)
+# Max window training (starting from previous Dec 1st)
 uv run python scripts/train.py --days max --train-window max
+```
+
+**Training Session Tracking:**
+Each training session automatically creates a JSON file in `models/training_session_YYYYMMDD_HHMMSS.json` that captures:
+- All iteration metrics (Win Rate, W/L Ratio, Sharpe, etc.)
+- Monthly performance breakdown
+- Exit statistics
+- Training parameters
+
+**Visualize Training Progress:**
+
+*Terminal Viewer (Quick):*
+```bash
+# Interactive mode - select from available sessions (displays in terminal)
+uv run python scripts/view_training.py
+
+# Or access via dashboard: run.py → Option 6
+```
+
+*Graphical Plots (For Reports):*
+```bash
+# Interactive mode - select from available sessions
+uv run python scripts/plot_training.py
+
+# Plot a specific session
+uv run python scripts/plot_training.py models/training_session_20241228_120000.json
+
+# Save plot to file
+uv run python scripts/plot_training.py models/training_session_20241228_120000.json --save training_plot.png
 ```
 
 #### Customizing Your Model

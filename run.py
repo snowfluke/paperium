@@ -30,9 +30,10 @@ def main_menu():
     console.print("3. [bold cyan]Model Training[/bold cyan] (Customizable)")
     console.print("4. [bold blue]Evaluation[/bold blue] (Backtest)")
     console.print("5. [bold white]Stock Analysis[/bold white] (Single Ticker Deep Dive)")
+    console.print("6. [bold yellow]Training Sessions[/bold yellow] (View Progress)")
     console.print("X. Exit")
-    
-    choice = Prompt.ask("\nSelect action", choices=["1", "2", "3", "4", "5", "0", "X", "x"], default="1")
+
+    choice = Prompt.ask("\nSelect action", choices=["1", "2", "3", "4", "5", "6", "0", "X", "x"], default="1")
     
     if choice == "1":
         custom_capital = IntPrompt.ask("Extra Money / Free Capital to allocate (IDR)", default=0)
@@ -48,6 +49,8 @@ def main_menu():
         eval_menu()
     elif choice == "5":
         analyze_menu()
+    elif choice == "6":
+        view_training_menu()
     elif choice == "0":
         setup_menu()
     elif choice.upper() == "X":
@@ -90,6 +93,17 @@ def analyze_menu():
     cmd = ["uv", "run", "python", "scripts/analyze.py", ticker, "--portfolio", str(portfolio)]
     
     console.print(f"\n[yellow]Executing: {' '.join(cmd)}[/yellow]\n")
+    subprocess.run(cmd)
+
+def view_training_menu():
+    clear_screen()
+    console.print(Panel.fit("[bold yellow]Training Session Viewer[/bold yellow]", border_style="yellow"))
+
+    console.print("\n[dim]View training session progression in terminal[/dim]\n")
+
+    cmd = ["uv", "run", "python", "scripts/view_training.py"]
+
+    console.print(f"[yellow]Launching session viewer...[/yellow]\n")
     subprocess.run(cmd)
 
 def train_menu():

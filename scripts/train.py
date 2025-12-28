@@ -70,6 +70,27 @@ def main():
     console.print(f"[bold cyan]Starting Targeted Training for XGBOOST (Gen 5)[/bold cyan]")
     console.print(f"Target Score: [green]{args.target:.1%}[/green] | Max Iter: {args.max_iter}")
 
+    # Initialize training session file
+    import json
+    session_id = datetime.now().strftime('%Y%m%d_%H%M%S')
+    session_file = f"models/training_session_{session_id}.json"
+    session_data = {
+        "session_id": session_id,
+        "start_time": datetime.now().isoformat(),
+        "parameters": {
+            "target_score": args.target,
+            "max_iter": args.max_iter,
+            "max_depth": args.max_depth,
+            "n_estimators": args.n_estimators,
+            "eval_days": eval_days,
+            "train_window": train_window,
+            "use_gpu": args.gpu,
+            "force_replace": args.force
+        },
+        "iterations": []
+    }
+    console.print(f"[dim]Session file: {session_file}[/dim]")
+
     # Show GPU warning once at the start
     if args.gpu:
         import sys
@@ -114,8 +135,10 @@ def main():
         iteration += 1
         console.print(f"\n[bold magenta]Iteration {iteration}/{args.max_iter}[/bold magenta]")
 
+        iteration_start = datetime.now()
         results = bt.run(start_date=start_date, end_date=end_date, train_window=train_window, pre_loaded_data=featured_data)
-        
+        iteration_time = (datetime.now() - iteration_start).total_seconds()
+
         if results and 'win_rate' in results:
             # Calculate Metrics (Gen 5 Improved Formula)
             monthly_wrs = [m['win_rate'] / 100.0 for m in results.get('monthly_metrics', [])]
@@ -133,11 +156,35 @@ def main():
             console.print(f"  Win Rate: [bold]{effective_wr:.1%}[/bold]")
             console.print(f"  W/L Ratio: [bold]{wl_ratio:.2f}x[/bold]")
 
+            # Save iteration data to session file
+            iteration_data = {
+                "iteration": iteration,
+                "timestamp": datetime.now().isoformat(),
+                "duration_seconds": iteration_time,
+                "metrics": {
+                    "win_rate": float(effective_wr),
+                    "wl_ratio": float(wl_ratio),
+                    "total_return": float(results.get('total_return', 0)),
+                    "sharpe_ratio": float(results.get('sharpe_ratio', 0)),
+                    "sortino_ratio": float(results.get('sortino_ratio', 0)),
+                    "max_drawdown": float(results.get('max_drawdown', 0)),
+                    "total_trades": int(results.get('total_trades', 0)),
+                    "avg_win": float(avg_win),
+                    "avg_loss": float(avg_loss)
+                },
+                "monthly_performance": results.get('monthly_metrics', []),
+                "exit_breakdown": results.get('exit_breakdown', {})
+            }
+            session_data["iterations"].append(iteration_data)
+
+            # Save session file after each iteration
+            with open(session_file, 'w') as f:
+                json.dump(session_data, f, indent=2)
+
             # Gen 4 approach: Simple, no complex optimization
             # Just train fresh models and pick the best one
-            
+
             # Metadata for comparison
-            import json
             metadata_path = 'models/champion_metadata.json'
             if os.path.exists(metadata_path):
                 try:
@@ -181,6 +228,28 @@ def main():
                 break
         else:
             console.print("[red]Backtest iteration failed.[/red]")
+
+    # Save final session summary
+    session_data["end_time"] = datetime.now().isoformat()
+    session_data["total_iterations"] = iteration
+
+    if session_data["iterations"]:
+        best_iteration = max(session_data["iterations"], key=lambda x: x["metrics"]["win_rate"])
+        session_data["best_iteration"] = {
+            "iteration": best_iteration["iteration"],
+            "win_rate": best_iteration["metrics"]["win_rate"],
+            "wl_ratio": best_iteration["metrics"]["wl_ratio"],
+            "total_return": best_iteration["metrics"]["total_return"]
+        }
+
+    with open(session_file, 'w') as f:
+        json.dump(session_data, f, indent=2)
+
+    console.print(f"\n[bold cyan]Training session completed![/bold cyan]")
+    console.print(f"Session data saved to: [dim]{session_file}[/dim]")
+    if session_data.get("best_iteration"):
+        best = session_data["best_iteration"]
+        console.print(f"Best iteration: #{best['iteration']} - WR: {best['win_rate']:.1%}, W/L: {best['wl_ratio']:.2f}x")
 
 if __name__ == "__main__":
     main()

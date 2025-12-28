@@ -250,6 +250,9 @@ class TradingModel:
         
         X = X[self.feature_names]
         
+        # Clean data for GPU backend
+        X = X.replace([np.inf, -np.inf], np.nan).fillna(0)
+        
         # Predict
         y_pred = self.model.predict(X)
         y_proba = self.model.predict_proba(X)[:, 1]  # Probability of class 1 (up)

@@ -374,7 +374,14 @@ class MLBacktest:
                             for f in missing: X[f] = 0
                             X = X[self.global_xgb.feature_names]
                         
-                        probs = self.global_xgb.model.predict_proba(X.values)[:, 1]
+                        # Critical: Clean data for GPU backend (stricter validation)
+                        # Replace inf with nan, then fill with 0
+                        X_clean = X.replace([np.inf, -np.inf], np.nan).fillna(0)
+                        
+                        # Ensure float32 for GPU efficiency
+                        X_clean = X_clean.astype(np.float32)
+                        
+                        probs = self.global_xgb.model.predict_proba(X_clean.values)[:, 1]
                         xgb_scores[ticker] = pd.Series((probs - 0.5) * 2, index=X.index)
                 except Exception as e:
                     console.print(f"  [red]✗[/red] XGBoost batch prediction failed for {ticker}: {e}")

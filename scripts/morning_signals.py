@@ -55,10 +55,13 @@ def log(msg: str):
     console.print(f"[dim][{mins:02d}:{secs:02d}][/dim] {msg}")
 
 
-# Thresholds for order type decision
-MARKET_ORDER_THRESHOLD = 0.70  # Lowered slightly
-LIMIT_ORDER_THRESHOLD = 0.30   # Minimum filter threshold
-MIN_SIGNAL_SCORE = 0.30        # Increased to filter out weak/noisy signals (e.g. 20%)
+# Thresholds aligned with train/eval (threshold 0.40 = 70% win probability)
+# ML scores are on [-1, 1] scale where (prob - 0.5) * 2
+# prob 0.70 → ML score 0.40 (training baseline)
+# prob 0.80 → ML score 0.60 (high conviction)
+ML_SCORE_THRESHOLD = 0.40      # Minimum ML score (matches train/eval at 0.40)
+MARKET_ORDER_THRESHOLD = 0.60  # ML score for immediate MARKET orders (80% prob)
+LIMIT_ORDER_THRESHOLD = 0.40   # ML score for LIMIT orders (70% prob)
 
 
 class MorningSignals:
@@ -106,13 +109,14 @@ class MorningSignals:
                 logger.warning(f"Failed to load metadata: {e}")
         return {}
     
-    def run(self, portfolio_value: Optional[float] = None, custom_capital: float = 0.0):
+    def run(self, portfolio_value: Optional[float] = None, custom_capital: float = 0.0, test_mode: bool = False):
         """
         Run morning signal generation.
-        
+
         Args:
             portfolio_value: Total portfolio value (optional, falls back to config)
             custom_capital: Extra capital to distribute among signals
+            test_mode: If True, skip user input and run in test mode
         """
         if portfolio_value is None:
             portfolio_value = config.portfolio.total_value
@@ -127,24 +131,30 @@ class MorningSignals:
         console.print(Panel(
             f"[bold white]IHSG MORNING SIGNALS[/bold white]\n"
             f"[dim]Quantitative Trading Dashboard • {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}[/dim]\n"
-            f"[dim]Model Win Rate: [bold green]{win_rate:.1%}[/bold green] | Trained: [dim]{trained_date}[/dim]",
+            f"[dim]Model Win Rate: [bold green]{win_rate:.1%}[/bold green] | Trained: [dim]{trained_date}[/dim]\n"
+            f"[dim]ML Threshold: [cyan]{ML_SCORE_THRESHOLD:.2f}[/cyan] (≥70% prob) | "
+            f"Market Order: [cyan]{MARKET_ORDER_THRESHOLD:.2f}[/cyan] (≥80% prob)[/dim]",
             border_style="cyan",
             padding=(0, 2),
             box=box.DOUBLE
         ))
         
         # Step 0: Interactive Mode Selection
-        console.print("\n[bold yellow]Select Mode:[/bold yellow]")
-        console.print("1. [bold green]Live Mode[/bold green] (Generate signals & Update positions)")
-        console.print("2. [bold magenta]Test Mode[/bold magenta] (View signals only - NO position changes)")
-        
-        mode_choice = input("\nEnter choice (1 or 2, default=2): ").strip()
-        is_live = (mode_choice == '1')
-        
-        if is_live:
-            console.print("[bold red]LOCKED IN LIVE MODE[/bold red]")
+        if test_mode:
+            is_live = False
+            console.print("\n[bold blue]RUNNING IN TEST MODE (VIEW ONLY)[/bold blue]")
         else:
-            console.print("[bold blue]RUNNING IN TEST MODE (VIEW ONLY)[/bold blue]")
+            console.print("\n[bold yellow]Select Mode:[/bold yellow]")
+            console.print("1. [bold green]Live Mode[/bold green] (Generate signals & Update positions)")
+            console.print("2. [bold magenta]Test Mode[/bold magenta] (View signals only - NO position changes)")
+
+            mode_choice = input("\nEnter choice (1 or 2, default=2): ").strip()
+            is_live = (mode_choice == '1')
+
+            if is_live:
+                console.print("[bold red]LOCKED IN LIVE MODE[/bold red]")
+            else:
+                console.print("[bold blue]RUNNING IN TEST MODE (VIEW ONLY)[/bold blue]")
         
         # Step 1: Update data
         log("[yellow]Fetching latest market data...[/yellow]")
@@ -371,19 +381,20 @@ class MorningSignals:
                 # Rank and process
                 rankings = self.signal_combiner.rank_stocks(data_by_ticker, ml_predictions)
                 if not rankings.empty:
-                    # STRICT FILTERING: Must be a BUY signal AND meet the score threshold
+                    # STRICT FILTERING: Must be a BUY signal AND meet ML score threshold
+                    # This aligns with train/eval which uses pure ML score >= 0.40
                     buy_signals = rankings[
-                        (rankings['signal'] == 'BUY') & (rankings['composite_score'] >= MIN_SIGNAL_SCORE)
+                        (rankings['signal'] == 'BUY') & (rankings['ml_score'] >= ML_SCORE_THRESHOLD)
                     ].copy()
                 else:
                     return []
             else:
-                # Indicators only fallback
+                # Indicators only fallback (no ML available)
                 rankings = self.signal_combiner.rank_stocks(data_by_ticker, {})
                 if not rankings.empty:
-                    # STRICT FILTERING: Must be a BUY signal AND meet the score threshold
+                    # Without ML, fall back to composite score
                     buy_signals = rankings[
-                        (rankings['signal'] == 'BUY') & (rankings['composite_score'] >= MIN_SIGNAL_SCORE)
+                        (rankings['signal'] == 'BUY') & (rankings['composite_score'] >= 0.30)
                     ].copy()
                 else:
                     return []
@@ -397,10 +408,12 @@ class MorningSignals:
         
         # Debug: Print top candidates for confirmation
         if not top_candidates.empty:
-            console.print("\n[dim]Top Candidates by Model Strength (Raw):[/dim]")
+            console.print("\n[dim]Top Candidates by ML Score (Aligned with Train/Eval):[/dim]")
             for _, row in top_candidates.iterrows():
-                conf_pct = row['composite_score'] * 100
-                console.print(f"  [dim]{row['ticker']}: {conf_pct:.1f}%[/dim]")
+                ml_score = row.get('ml_score', 0.0)
+                # Convert ML score to probability for display
+                ml_prob = (ml_score / 2.0) + 0.5  # [-1,1] → [0,1]
+                console.print(f"  [dim]{row['ticker']}: ML Score {ml_score:.3f} (Prob {ml_prob:.1%})[/dim]")
         
         # Phase 3: Final signal generation with sizing
         new_signals = []
@@ -417,10 +430,12 @@ class MorningSignals:
             
             ticker = row['ticker']
             sector = self.sector_mapping.get(ticker, 'Other')
-            
-            # Determine order type based on signal strength
-            score = row['composite_score']
-            if score >= MARKET_ORDER_THRESHOLD:
+
+            # Determine order type based on ML signal strength (aligned with train/eval)
+            # ML score 0.60 = 80% win probability → MARKET order (immediate)
+            # ML score 0.40-0.59 = 70-80% win probability → LIMIT order (wait for entry)
+            ml_score = row.get('ml_score', 0.0)
+            if ml_score >= MARKET_ORDER_THRESHOLD:
                 order_type = OrderType.MARKET.value
             else:
                 order_type = OrderType.LIMIT.value
@@ -446,26 +461,30 @@ class MorningSignals:
             
             # Calculate position size (Fixed bug: pass available capital, not pre-divided)
             try:
+                # Convert ML score to confidence [0, 1] for position sizing
+                # ML score range [-1, 1], convert to [0, 1]
+                confidence = min(1.0, max(0.0, (ml_score + 1.0) / 2.0))
+
                 size_info = self.position_sizer.calculate_position_size(
                     portfolio_value=portfolio_value,
                     stock_volatility=row.get('volatility_20', 0.3),
                     avg_market_volatility=0.2,
                     entry_price=entry_price,
                     stop_loss=exit_levels.stop_loss,
-                    confidence=min(1.0, score + 0.5)  # Offset to ensure meaningful size for buy signals
+                    confidence=confidence
                 )
             except Exception as e:
                 logger.debug(f"Position sizing failed for {ticker}: {e}")
                 continue
-            
+
             if size_info['shares'] <= 0:
                 logger.debug(f"Skipping {ticker} due to 0 shares (Size: {size_info['position_value']:.0f})")
                 continue
-            
+
             signal = {
                 'ticker': ticker,
                 'sector': sector,
-                'score': score,
+                'score': ml_score,  # Use ML score for display
                 'strategy_mode': strategy_mode,
                 'order_type': order_type,
                 'entry_price': round(entry_price, 0),
@@ -632,10 +651,11 @@ def main():
     
     parser = argparse.ArgumentParser(description='IHSG Morning Trading Signals')
     parser.add_argument('--custom-capital', type=float, default=0.0, help='Custom capital to distribute among signals')
+    parser.add_argument('--test', action='store_true', help='Run in test mode (no position changes)')
     args = parser.parse_args()
-    
+
     signals = MorningSignals()
-    signals.run(custom_capital=args.custom_capital)
+    signals.run(custom_capital=args.custom_capital, test_mode=args.test)
 
 
 if __name__ == "__main__":

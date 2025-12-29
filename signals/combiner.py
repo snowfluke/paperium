@@ -167,15 +167,22 @@ class SignalCombiner:
             try:
                 # Get ML predictions for this ticker if available
                 ml_pred = ml_predictions.get(ticker) if ml_predictions else None
-                
+
                 # Calculate signals
                 signals_df = self.calculate_signals(df, ml_pred)
-                
+
                 # Get latest row
                 latest = signals_df.iloc[-1].copy()
                 latest['ticker'] = ticker
                 latest['date'] = df['date'].iloc[-1]
-                
+
+                # Add raw ML score for filtering (aligned with train/eval)
+                if ml_pred is not None and latest.name in ml_pred.index:
+                    ml_value = ml_pred.loc[latest.name]
+                    latest['ml_score'] = (ml_value - 0.5) * 2  # Convert to [-1, 1]
+                else:
+                    latest['ml_score'] = 0.0
+
                 rankings.append(latest)
                 
             except Exception as e:

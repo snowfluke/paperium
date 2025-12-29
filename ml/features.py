@@ -31,13 +31,23 @@ class FeatureEngineer:
         'rsi_lag1', 'rsi_change', 'is_month_start', 'is_month_end',
         'dow_0', 'dow_1', 'dow_2', 'dow_3', 'dow_4'
     ]
+
+    # GEN 7 Feature Set: Adds Intraday Behavior Proxies
+    GEN7_FEATURES = LEGACY_46_FEATURES + [
+        'upper_shadow_ratio',    # Upper wick / body - detects rejection at highs
+        'gap_size',              # Gap magnitude (positive or negative)
+        'gap_followthrough',     # Close vs Open after gap - measures gap strength
+        'intraday_momentum',     # Close position in daily range - strength indicator
+        'fade_signal',           # Combined: gap exhaustion + weak close + upper shadow
+    ]
     
-    def __init__(self, config=None):
+    def __init__(self, config=None, use_gen7_features=True):
         """
         Initialize feature engineer.
-        
+
         Args:
             config: MLConfig object (optional)
+            use_gen7_features: If True, use GEN7 feature set with Session-1 features (default True)
         """
         if config:
             self.feature_lags = config.feature_lags
@@ -45,9 +55,12 @@ class FeatureEngineer:
         else:
             self.feature_lags = [1, 2, 3, 5, 10, 20]
             self.target_horizon = 5  # 5-day forward prediction for day trading
-            
+
         # Initialize sub-modules for internal indicator calculation
         self.technical = TechnicalIndicators()
+
+        # Select feature set
+        self.feature_set = self.GEN7_FEATURES if use_gen7_features else self.LEGACY_46_FEATURES
     
     def create_features(
         self, 
@@ -88,7 +101,7 @@ class FeatureEngineer:
         df = df.dropna()
         
         # 6. Ensure EXACT feature list and order
-        X = df[self.LEGACY_46_FEATURES]
+        X = df[self.feature_set]
         y = df['target_direction']
         
         if include_raw_return:
@@ -179,7 +192,35 @@ class FeatureEngineer:
         # Mean Reversion Strength: Standardized distance from 20-day MA
         price_to_ma_std = df['price_to_ma20'].rolling(60).std()
         df['mean_reversion_strength'] = df['price_to_ma20'].abs() / price_to_ma_std.replace(0, 1)
-        
+
+        # --- INTRADAY BEHAVIOR PROXIES (GEN 7) ---
+        # Hypothesis: Stocks with weak intraday behavior (pop then fade) tend to underperform
+        # Strategy: Use daily OHLC patterns to detect weak intraday structure
+
+        # Note: We trade EOD → hold next day, so we predict "tomorrow's outcome" not "today's intraday"
+
+        # 1. Upper Shadow Ratio: How much of the candle is upper wick
+        # High value = price rejected highs (likely faded from early spike)
+        # This indicates weak buying pressure / profit-taking
+        upper_shadow = df['high'] - df[['open', 'close']].max(axis=1)
+        body_size = (df[['open', 'close']].max(axis=1) - df[['open', 'close']].min(axis=1)).replace(0, 1)
+        df['upper_shadow_ratio'] = upper_shadow / body_size
+
+        # 2. Gap Exhaustion: Large gap that fails to follow through
+        # Gap up + close near/below open = exhaustion (bad for tomorrow)
+        df['gap_size'] = (df['open'] - df['close'].shift(1)) / df['close'].shift(1).replace(0, 1)
+        df['gap_followthrough'] = (df['close'] - df['open']) / df['open'].replace(0, 1)
+
+        # 3. Intraday Strength: Where close is within the day's range
+        # Already have 'close_position' from legacy features, but add momentum version
+        # High value = closed near high (strength), Low value = closed near low (weakness)
+        df['intraday_momentum'] = (df['close'] - df['low']) / (df['high'] - df['low']).replace(0, 1)
+
+        # 4. Fade Signal: Combined metric for gap exhaustion
+        # High when: Large gap + weak close + upper shadow
+        # This suggests: "Gapped up, spiked early, faded, closed weak" → AVOID tomorrow
+        df['fade_signal'] = (df['gap_size'].abs() * df['upper_shadow_ratio'] * (1 - df['intraday_momentum'])).fillna(0)
+
         return df
     
     def _add_lagged_features(self, df: pd.DataFrame) -> pd.DataFrame:
@@ -255,9 +296,9 @@ class FeatureEngineer:
         df = self._add_price_features(df)
         df = self._add_lagged_features(df)
         df = self._add_calendar_features(df)
-        
-        X = df[self.LEGACY_46_FEATURES].fillna(0)
-        
+
+        X = df[self.feature_set].fillna(0)
+
         return X
     
     def get_feature_importance(

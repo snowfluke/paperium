@@ -36,6 +36,67 @@ class PositionSizer:
             self.max_portfolio_vol = 0.25
             self.max_correlation = 0.7
     
+    def calculate_atr_based_size(
+        self,
+        portfolio_value: float,
+        entry_price: float,
+        atr: float,
+        risk_pct: float = 0.01,
+        atr_multiplier: float = 2.0
+    ) -> Dict:
+        """
+        Calculate position size using ATR-based volatility targeting.
+
+        Hypothesis 3: Volatility Targeting
+        Formula: Shares = Risk Budget / (ATR * Multiplier)
+
+        Args:
+            portfolio_value: Total portfolio value
+            entry_price: Entry price per share
+            atr: Average True Range (volatility measure)
+            risk_pct: Portfolio risk per trade (default 1%)
+            atr_multiplier: ATR multiplier for risk distance (default 2.0)
+
+        Returns:
+            Dictionary with position sizing details
+        """
+        if atr <= 0 or entry_price <= 0:
+            return {
+                'shares': 0,
+                'position_value': 0.0,
+                'position_pct': 0.0,
+                'risk_amount': 0.0,
+                'risk_pct': 0.0,
+                'sizing_method': 'atr_volatility_targeting'
+            }
+
+        # Risk budget for this trade
+        risk_budget = portfolio_value * risk_pct
+
+        # Risk per share = ATR * Multiplier
+        risk_per_share = atr * atr_multiplier
+
+        # Calculate shares: Risk Budget / Risk Per Share
+        shares = int(risk_budget / risk_per_share)
+
+        # Actual position value
+        position_value = shares * entry_price
+
+        # Actual risk (if hit stop loss)
+        actual_risk = shares * risk_per_share
+
+        return {
+            'shares': shares,
+            'position_value': round(position_value, 2),
+            'position_pct': round(position_value / portfolio_value * 100, 2),
+            'risk_amount': round(actual_risk, 2),
+            'risk_pct': round(actual_risk / portfolio_value * 100, 2),
+            'atr': round(atr, 2),
+            'atr_multiplier': atr_multiplier,
+            'risk_per_share': round(risk_per_share, 2),
+            'sizing_method': 'atr_volatility_targeting'
+        }
+
     def calculate_position_size(
         self,
         portfolio_value: float,
@@ -46,11 +107,13 @@ class PositionSizer:
         win_rate: float = 0.55,
         avg_win_loss_ratio: float = 1.5,
         confidence: float = 0.5,
-        market_regime: Optional[Literal["HIGH_VOL", "LOW_VOL", "NORMAL"]] = None
+        market_regime: Optional[Literal["HIGH_VOL", "LOW_VOL", "NORMAL"]] = None,
+        atr: Optional[float] = None,
+        use_atr_targeting: bool = True
     ) -> Dict:
         """
         Calculate position size using multiple factors.
-        
+
         Args:
             portfolio_value: Total portfolio value
             stock_volatility: Stock's annualized volatility
@@ -60,10 +123,45 @@ class PositionSizer:
             win_rate: Historical win rate (0-1)
             avg_win_loss_ratio: Average winner / average loser
             confidence: Signal confidence (0-1)
-            
+            market_regime: Market regime (HIGH_VOL, LOW_VOL, NORMAL)
+            atr: Average True Range (if available)
+            use_atr_targeting: If True and ATR available, use ATR-based sizing as primary method
+
         Returns:
             Dictionary with position sizing details
         """
+        # HYPOTHESIS 3: ATR-based Volatility Targeting (Primary Method)
+        if use_atr_targeting and atr is not None and atr > 0:
+            size_info = self.calculate_atr_based_size(
+                portfolio_value=portfolio_value,
+                entry_price=entry_price,
+                atr=atr,
+                risk_pct=0.01,  # 1% risk per trade
+                atr_multiplier=2.0
+            )
+
+            # Apply confidence and regime adjustments
+            confidence_mult = 0.5 + (confidence * 0.5)  # 0.5x to 1.0x
+            regime_mult = self._get_regime_multiplier(market_regime)
+
+            # Adjust position size
+            adjusted_shares = int(size_info['shares'] * confidence_mult * regime_mult)
+            size_info['shares'] = adjusted_shares
+            size_info['position_value'] = round(adjusted_shares * entry_price, 2)
+            size_info['position_pct'] = round(size_info['position_value'] / portfolio_value * 100, 2)
+            size_info['confidence_mult'] = round(confidence_mult, 2)
+            size_info['regime_mult'] = round(regime_mult, 2)
+
+            # Apply max position constraint
+            max_position = portfolio_value / self.max_positions
+            if size_info['position_value'] > max_position:
+                size_info['shares'] = int(max_position / entry_price)
+                size_info['position_value'] = round(size_info['shares'] * entry_price, 2)
+                size_info['position_pct'] = round(size_info['position_value'] / portfolio_value * 100, 2)
+
+            return size_info
+
+        # LEGACY METHOD: Multi-factor approach (fallback if ATR not available)
         # Base position size
         base_size = portfolio_value * self.base_position_pct
         
@@ -115,14 +213,16 @@ class PositionSizer:
     def _get_regime_multiplier(self, regime: Optional[str]) -> float:
         """
         Get position size multiplier based on market regime.
-        
+
         Args:
-            regime: Market regime string (HIGH_VOL, LOW_VOL, NORMAL)
-            
+            regime: Market regime string (CRASH, HIGH_VOL, LOW_VOL, NORMAL)
+
         Returns:
             Multiplier to apply to position size
         """
-        if regime == "HIGH_VOL":
+        if regime == "CRASH":
+            return 0.0  # No trades during market crash
+        elif regime == "HIGH_VOL":
             return 0.7  # Reduce exposure in high volatility
         elif regime == "LOW_VOL":
             return 1.2  # Slightly increase in calm markets

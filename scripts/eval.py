@@ -38,6 +38,7 @@ from data.storage import DataStorage
 from data.fetcher import get_sector_mapping
 from ml.model import TradingModel
 from signals.screener import Screener
+from signals.regime_detector import RegimeDetector, MarketRegime
 
 logging.basicConfig(level=logging.WARNING)
 console = Console()
@@ -60,7 +61,8 @@ class MLBacktest:
     """
     
     def __init__(self, model_type: str = 'xgboost', retrain: bool = False, custom_model_path: Optional[str] = None,
-                 sl_atr_mult: float = 2.0, tp_atr_mult: float = 3.0, signal_threshold: float = 0.70):
+                 sl_atr_mult: float = 2.0, tp_atr_mult: float = 3.0, signal_threshold: float = 0.70,
+                 use_gen7_features: bool = True):
         """
         Args:
             model_type: 'xgboost'
@@ -70,6 +72,7 @@ class MLBacktest:
             sl_atr_mult: Stop loss ATR multiplier (dynamic per iteration)
             tp_atr_mult: Take profit ATR multiplier (dynamic per iteration)
             signal_threshold: Minimum ML score to trigger a trade (default 0.70 for high conviction)
+            use_gen7_features: If True, use GEN7 feature set with Session-1 features (default True)
         """
         self.storage = DataStorage(config.data.db_path)
         self.sector_mapping = get_sector_mapping()
@@ -77,6 +80,7 @@ class MLBacktest:
         self.retrain = retrain
         self.custom_model_path = custom_model_path
         self.screener = Screener(config)
+        self.use_gen7_features = use_gen7_features
 
         # Trading parameters
         self.initial_capital = 100_000_000
@@ -97,6 +101,10 @@ class MLBacktest:
 
         # Cache for pooled training data (avoids re-pooling on each iteration)
         self.pooled_train_data: Optional[Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]] = None
+
+        # Market regime detector for crash filtering (Gen 7)
+        self.regime_detector = RegimeDetector() if use_gen7_features else None
+        self.ihsg_data: Optional[pd.DataFrame] = None
     
     def run(self, start_date: str, end_date: str, train_window: int = 252, pre_loaded_data: Optional[pd.DataFrame] = None):
         """
@@ -202,7 +210,7 @@ class MLBacktest:
             
             if os.path.exists(xgb_path):
                 try:
-                    self.global_xgb = TradingModel(config.ml)
+                    self.global_xgb = TradingModel(config.ml, use_gen7_features=self.use_gen7_features)
                     self.global_xgb.load(xgb_path)
                     console.print(f"  ✓ Loaded Global XGBoost model from {xgb_path}")
                 except Exception as e:
@@ -245,7 +253,7 @@ class MLBacktest:
                 train_data = self._add_features(train_data)
 
                 # Use FeatureEngineer to get X, y, returns
-                temp_model = TradingModel(config.ml)
+                temp_model = TradingModel(config.ml, use_gen7_features=self.use_gen7_features)
                 X, y, returns = temp_model.feature_engineer.create_features(
                     train_data,
                     target_horizon=temp_model.feature_engineer.target_horizon,
@@ -308,7 +316,7 @@ class MLBacktest:
         # Train Global XGBoost
         if self.model_type == 'xgboost':
             try:
-                self.global_xgb = TradingModel(config.ml)
+                self.global_xgb = TradingModel(config.ml, use_gen7_features=self.use_gen7_features)
                 self.global_xgb.feature_names = X_combined.columns.tolist()
 
                 # Gen 6: Train fresh model each iteration
@@ -464,10 +472,28 @@ class MLBacktest:
             log(f"  XGB scores dist: mean={all_xgb.mean():.3f}, max={all_xgb.max():.3f}, min={all_xgb.min():.3f}")
 
         log(f"  Simulating {len(all_dates)} trading days...")
+        sim_start = time.time()
 
         # Pre-group data by date for fast lookups
         log("[dim]Pre-grouping data by date for optimization...[/dim]")
         date_grouped_data = {date: group for date, group in all_data_feat.groupby('date')}
+
+        # Load IHSG data for crash detection (Gen 7)
+        ihsg_series = None
+        if self.regime_detector:
+            try:
+                # Calculate start date for 5 years of data
+                from datetime import timedelta
+                ihsg_start = (pd.to_datetime(end_date) - timedelta(days=1825)).strftime('%Y-%m-%d')
+                ihsg_df = self.storage.get_prices(tickers=['^JKSE'], start_date=ihsg_start, end_date=end_date)
+                if not ihsg_df.empty:
+                    ihsg_df['date'] = pd.to_datetime(ihsg_df['date'])
+                    ihsg_series = ihsg_df.set_index('date')['close'].sort_index()
+                    log(f"[green]✓ IHSG crash filter enabled ({len(ihsg_series)} days)[/green]")
+                else:
+                    log("[yellow]⚠ IHSG data not found, crash filter disabled[/yellow]")
+            except Exception as e:
+                log(f"[yellow]⚠ Failed to load IHSG data: {e}[/yellow]")
 
         # Initialize
         cash = self.initial_capital
@@ -475,6 +501,7 @@ class MLBacktest:
         trades = []
         equity_curve = []
         max_seen_score = -1.0
+        crash_days_count = 0  # Track crash filter activations
 
         with Progress(
             TextColumn("[progress.description]{task.description}"),
@@ -543,6 +570,15 @@ class MLBacktest:
                 
                 # Open new positions
                 if len(positions) < self.max_positions:
+                    # Gen 7: Check IHSG crash filter first
+                    if self.regime_detector and ihsg_series is not None:
+                        is_crash = self.regime_detector.detect_ihsg_crash(ihsg_series, date)
+                        if is_crash:
+                            # Skip opening new positions during market crash
+                            crash_days_count += 1
+                            progress.update(task, advance=1)
+                            equity_curve.append({'date': date, 'equity': cash + sum(p['shares'] * p['entry_price'] for p in positions.values())})
+                            continue
                     candidates = []
 
                     for ticker in day_data['ticker'].unique():
@@ -641,6 +677,12 @@ class MLBacktest:
                 progress.update(task, advance=1)
 
         log(f"  Max combined score seen during simulation: {max_seen_score:.4f}")
+
+        # Log crash protection stats
+        if self.regime_detector and crash_days_count > 0:
+            crash_pct = crash_days_count / len(all_dates) * 100
+            log(f"  [cyan]🛡 IHSG Crash Filter: Protected {crash_days_count}/{len(all_dates)} days ({crash_pct:.1f}%)[/cyan]")
+
         return self._calculate_metrics(trades, equity_curve)
     
     def _calculate_metrics(self, trades: List[Dict], equity_curve: List[Dict]) -> Dict:

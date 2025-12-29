@@ -28,12 +28,13 @@ class TradingModel:
     Implements daily self-refinement (EOD model update).
     """
     
-    def __init__(self, config=None):
+    def __init__(self, config=None, use_gen7_features=True):
         """
         Initialize trading model.
-        
+
         Args:
             config: MLConfig object (optional)
+            use_gen7_features: If True, use GEN7 feature set with Session-1 features (default True)
         """
         if config:
             self.training_window = config.training_window
@@ -51,8 +52,9 @@ class TradingModel:
             self.learning_rate = 0.1
             self.min_child_weight = 3
             self.use_gpu = False
-        
-        self.feature_engineer = FeatureEngineer(config)
+
+        self.use_gen7_features = use_gen7_features
+        self.feature_engineer = FeatureEngineer(config, use_gen7_features=use_gen7_features)
         self.model = None
         self.feature_names = None
         self.last_trained = None

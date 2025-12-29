@@ -16,6 +16,7 @@ class MarketRegime(Enum):
     HIGH_VOL = "HIGH_VOL"
     LOW_VOL = "LOW_VOL"
     NORMAL = "NORMAL"
+    CRASH = "CRASH"  # IHSG is crashing - avoid all trades
 
 
 class RegimeDetector:
@@ -158,17 +159,111 @@ class RegimeDetector:
         
         return pd.Series(regimes, index=volatility.index)
     
+    def detect_ihsg_crash(
+        self,
+        ihsg_prices: pd.Series,
+        current_date: Optional[pd.Timestamp] = None,
+        crash_threshold: float = -0.05,
+        crash_window: int = 5,
+        drawdown_threshold: float = -0.10
+    ) -> bool:
+        """
+        Detect if IHSG (Indonesian market) is crashing.
+
+        Hypothesis: Trades fail when the broad market is crashing.
+        This is a HARD FILTER - returns True if market is crashing (avoid all trades).
+
+        Args:
+            ihsg_prices: Series of IHSG closing prices
+            current_date: Date to check (defaults to latest)
+            crash_threshold: Return threshold for single-day crash (default -5%)
+            crash_window: Number of recent days to check for sustained decline
+            drawdown_threshold: Drawdown from recent high (default -10%)
+
+        Returns:
+            True if market is crashing, False otherwise
+        """
+        if len(ihsg_prices) < crash_window + 20:
+            return False  # Insufficient data
+
+        if current_date is None:
+            current_date = ihsg_prices.index[-1]
+
+        # Get recent prices
+        try:
+            recent_prices = ihsg_prices.loc[:current_date].tail(crash_window + 20)
+        except (KeyError, TypeError):
+            recent_prices = ihsg_prices.tail(crash_window + 20)
+
+        if len(recent_prices) < crash_window:
+            return False
+
+        # Condition 1: Single-day crash (>5% drop)
+        daily_returns = recent_prices.pct_change()
+        latest_return = daily_returns.iloc[-1]
+        if latest_return <= crash_threshold:
+            logger.debug(f"IHSG CRASH: Single-day drop of {latest_return:.2%}")
+            return True
+
+        # Condition 2: Sustained decline (negative returns over crash_window days)
+        window_return = recent_prices.iloc[-1] / recent_prices.iloc[-crash_window] - 1
+        if window_return <= crash_threshold:
+            logger.debug(f"IHSG CRASH: {crash_window}-day decline of {window_return:.2%}")
+            return True
+
+        # Condition 3: Drawdown from recent high (20-day high)
+        recent_high = recent_prices.tail(20).max()
+        current_price = recent_prices.iloc[-1]
+        drawdown = (current_price - recent_high) / recent_high
+        if drawdown <= drawdown_threshold:
+            logger.debug(f"IHSG CRASH: {drawdown:.2%} drawdown from 20-day high")
+            return True
+
+        return False
+
+    def detect_regime_with_crash_filter(
+        self,
+        prices: pd.Series,
+        ihsg_prices: Optional[pd.Series] = None,
+        current_date: Optional[pd.Timestamp] = None
+    ) -> MarketRegime:
+        """
+        Detect market regime with IHSG crash filter.
+
+        Args:
+            prices: Series of stock closing prices
+            ihsg_prices: Series of IHSG index prices (optional)
+            current_date: Date to classify (defaults to latest)
+
+        Returns:
+            MarketRegime enum (CRASH takes priority over other regimes)
+        """
+        # First check for IHSG crash
+        if ihsg_prices is not None:
+            is_crashing = self.detect_ihsg_crash(ihsg_prices, current_date)
+            if is_crashing:
+                return MarketRegime.CRASH
+
+        # If no crash, use normal volatility-based regime detection
+        return self.detect_regime(prices, current_date)
+
     def get_position_multiplier(self, regime: MarketRegime) -> float:
         """
         Get position size multiplier based on regime.
-        
+
         Args:
             regime: Current market regime
-            
+
         Returns:
-            Multiplier to apply to position size (0.7 for HIGH_VOL, 1.0 for NORMAL, 1.2 for LOW_VOL)
+            Multiplier to apply to position size
+            - CRASH: 0.0 (no trades)
+            - HIGH_VOL: 0.7 (defensive)
+            - NORMAL: 1.0 (baseline)
+            - LOW_VOL: 1.2 (slightly aggressive)
         """
-        if regime == MarketRegime.HIGH_VOL:
+        if regime == MarketRegime.CRASH:
+            return 0.0  # No trades during market crash
+        elif regime == MarketRegime.HIGH_VOL:
             return 0.7  # Reduce position size in high volatility
         elif regime == MarketRegime.LOW_VOL:
             return 1.2  # Slightly increase in low volatility

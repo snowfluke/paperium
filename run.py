@@ -66,18 +66,23 @@ def setup_menu():
     
     console.print("\n[dim]Prepare your environment and sync market action[/dim]\n")
     console.print("1. [bold cyan]Clean Universe[/bold cyan] (Filter illiquid/suspended stocks)")
-    console.print("2. [bold magenta]Sync Data[/bold magenta] (Fetch 5 years of history via YF)")
+    console.print("2. [bold magenta]Sync Stock Data[/bold magenta] (Fetch 5 years of history via YF)")
+    console.print("3. [bold green]Download IHSG Index[/bold green] (For Gen 7 crash detection)")
     console.print("B. Back to Main Menu")
 
-    
-    choice = Prompt.ask("\nSelect setup action", choices=["1", "2", "B", "b"], default="1")
-    
+
+    choice = Prompt.ask("\nSelect setup action", choices=["1", "2", "3", "B", "b"], default="1")
+
     if choice == "1":
         console.print("\n[yellow]Running: uv run python scripts/clean_universe.py[/yellow]\n")
         subprocess.run(["uv", "run", "python", "scripts/clean_universe.py"])
     elif choice == "2":
         console.print("\n[yellow]Running: uv run python scripts/sync_data.py[/yellow]\n")
         subprocess.run(["uv", "run", "python", "scripts/sync_data.py"])
+    elif choice == "3":
+        days = IntPrompt.ask("Days of IHSG history to download", default=1825)
+        console.print(f"\n[yellow]Running: uv run python scripts/download_ihsg.py --days {days}[/yellow]\n")
+        subprocess.run(["uv", "run", "python", "scripts/download_ihsg.py", "--days", str(days)])
     elif choice.upper() == "B":
         return
 

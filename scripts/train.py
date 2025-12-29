@@ -15,6 +15,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from config import config
 from scripts.eval import MLBacktest
+from ml.features import FeatureEngineer
 
 console = Console()
 
@@ -30,6 +31,7 @@ def main():
     parser.add_argument('--force', action='store_true', help='Replace champion if better.')
     parser.add_argument('--max-iter', type=int, default=10, help='Maximum optimization iterations')
     parser.add_argument('--gpu', action='store_true', help='Use GPU acceleration')
+    parser.add_argument('--legacy', action='store_true', help='Use legacy Gen 6 features (46 features) instead of Gen 7 (50 features)')
 
     args = parser.parse_args()
     
@@ -82,10 +84,21 @@ def main():
             "eval_days": eval_days,
             "train_window": train_window,
             "use_gpu": args.gpu,
-            "force_replace": args.force
+            "force_replace": args.force,
+            "use_gen7_features": not args.legacy
         },
         "iterations": []
     }
+
+    # Show Gen 7 features banner
+    if args.legacy:
+        console.print("[yellow]⚠ LEGACY MODE: Using Gen 6 (46 features)[/yellow]")
+    else:
+        console.print("[bold green]✓ GEN 7 FEATURES (Default):[/bold green]")
+        console.print("  • Intraday Behavior Proxies (gap exhaustion, fade detection)")
+        console.print("  • IHSG Market Crash Filter (avoid trades during crashes)")
+        console.print("  • ATR-based Volatility Targeting (consistent position sizing)")
+        console.print(f"  • Feature count: {len(FeatureEngineer(config.ml, use_gen7_features=True).feature_set)} features")
     console.print(f"[dim]Session file: {session_file}[/dim]")
 
     # Show GPU warning once at the start
@@ -95,7 +108,7 @@ def main():
             console.print("[yellow]⚠ XGBoost MPS (Metal) acceleration can be unstable on some Mac environments. Using high-performance CPU ('hist') instead.[/yellow]")
 
     # Phase 0: Data Prep
-    backtester = MLBacktest()
+    backtester = MLBacktest(use_gen7_features=not args.legacy)
     end_date = datetime.now().strftime('%Y-%m-%d')
 
     # When using 'max', align to month boundaries for cleaner evaluation
@@ -320,10 +333,44 @@ def main():
 
     console.print(f"\n[bold cyan]Training session completed![/bold cyan]")
     console.print(f"Session data saved to: [dim]{session_file}[/dim]")
+
+    # Show session best vs global champion comparison
     if session_data.get("best_iteration"):
         best = session_data["best_iteration"]
-        console.print(f"Best iteration: #{best['iteration']} - WR: {best['win_rate']:.1%}, W/L: {best['wl_ratio']:.2f}x")
-        console.print(f"Best SL/TP: [cyan]{best['sl_atr_mult']:.2f}x ATR[/cyan] / [cyan]{best['tp_atr_mult']:.2f}x ATR[/cyan]")
+        best_score = best.get('composite_score', calculate_composite_score({
+            'win_rate': best['win_rate'] * 100,
+            'total_trades': best.get('total_trades', 0),
+            'max_drawdown': best.get('max_drawdown', -20),
+            'avg_win': best.get('avg_win', 0),
+            'avg_loss': best.get('avg_loss', -1)
+        }))
+
+        console.print(f"\n[bold yellow]Session Best:[/bold yellow] Iteration #{best['iteration']}")
+        console.print(f"  WR: {best['win_rate']:.1%} | W/L: {best['wl_ratio']:.2f}x | Score: {best_score:.4f}")
+        console.print(f"  SL/TP: [cyan]{best['sl_atr_mult']:.2f}x / {best['tp_atr_mult']:.2f}x ATR[/cyan]")
+
+        # Compare with global champion
+        metadata_path = 'models/champion_metadata.json'
+        if os.path.exists(metadata_path):
+            try:
+                with open(metadata_path, 'r') as f:
+                    metadata = json.load(f)
+                champ = metadata.get('xgboost', {})
+                champ_score = champ.get('composite_score', 0.0)
+
+                console.print(f"\n[bold green]Global Champion:[/bold green] Score: {champ_score:.4f}")
+                console.print(f"  WR: {champ.get('win_rate', 0):.1%} | W/L: {champ.get('wl_ratio', 0):.2f}x | Trades: {champ.get('total_trades', 0)}")
+                console.print(f"  SL/TP: [cyan]{champ.get('sl_atr_mult', 0):.2f}x / {champ.get('tp_atr_mult', 0):.2f}x ATR[/cyan]")
+                console.print(f"  Date: [dim]{champ.get('date', 'Unknown')}[/dim]")
+
+                # Show verdict
+                if best_score > champ_score:
+                    console.print(f"\n[bold green]✓ NEW CHAMPION![/bold green] Session best beat global champion!")
+                else:
+                    delta = champ_score - best_score
+                    console.print(f"\n[yellow]Champion retained.[/yellow] Current champion is {delta:.4f} better.")
+            except:
+                pass
 
 if __name__ == "__main__":
     main()

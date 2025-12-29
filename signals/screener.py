@@ -100,9 +100,57 @@ class Screener:
             if atr_pct < 1.0: # Minimum 1% daily range
                 return False
                 
+            # 6. Circuit Breaker Check (ARA/ARB)
+            if not self._check_circuit_breaker(latest['close'], df['close'].shift(1).iloc[-1]):
+                return False
+
             return True
             
         except Exception as e:
             logger.debug(f"Screening failed for {ticker}: {e}")
             return False
+
+    def _check_circuit_breaker(self, current_price: float, prev_close: float) -> bool:
+        """
+        Check if stock is locked at Auto Rejection limits (ARA/ARB).
+        
+        IDX Regulations (2025):
+        - ARB (Lower): Flat 15% (Effective Apr 2025)
+        - ARA (Upper):
+            - Price < 200: 35%
+            - Price 200-5000: 25%
+            - Price > 5000: 20%
+            
+        Returns:
+            True if SAFE (not locked), False if LOCKED (ARA/ARB)
+        """
+        if prev_close == 0:
+            return True
+            
+        pct_change = (current_price - prev_close) / prev_close
+        
+        # 1. Determine ARA Limit based on price tier (using prev_close as basis)
+        if prev_close < 200:
+            ara_cap = 0.35
+        elif prev_close <= 5000:
+            ara_cap = 0.25
+        else:
+            ara_cap = 0.20
+            
+        # 2. Determine ARB Limit 
+        # Note: New regulation effective Apr 2025 sets uniform 15% ARB
+        # Safe assumption for late 2025 context
+        arb_cap = 0.15
+        
+        
+        # Check buffer (within 0.5% of limit is considered "locked/risky")
+        # ARA Check: Don't buy if locked up (cannot enter)
+        if pct_change >= (ara_cap - 0.005):
+            return False
+            
+        # ARB Check: Don't buy if locked down (falling knife)
+        if pct_change <= -(arb_cap - 0.005):
+            return False
+            
+        return True
 

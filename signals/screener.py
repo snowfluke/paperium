@@ -60,7 +60,12 @@ class Screener:
             if latest['close'] < self.min_price:
                 return False
                 
-            # 2. Liquidity check (20-day avg volume)
+            # 2. Liquidity check
+            # a. Not Suspended (Volume > 0)
+            if latest['volume'] <= 0:
+                return False
+                
+            # b. Average Volume (20-day)
             avg_vol = df['volume'].rolling(20).mean().iloc[-1]
             if avg_vol < self.min_volume:
                 return False

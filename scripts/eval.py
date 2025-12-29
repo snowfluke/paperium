@@ -119,7 +119,7 @@ class MLBacktest:
         console.print(Panel.fit(
             f"[bold blue]IHSG ML Evaluation[/bold blue]\n"
             f"[dim]{start_date} to {end_date}[/dim]\n"
-            f"[dim]Model: {self.model_type.upper()}[/dim]",
+            f"[dim]Model: {self.model_type.upper()} | Threshold: {self.signal_threshold:.2f}[/dim]",
             border_style="blue"
         ))
 
@@ -815,15 +815,18 @@ def main():
     parser = argparse.ArgumentParser(description='ML-Based Evaluation')
     parser.add_argument('--start', default='2024-01-01', help='Start date')
     parser.add_argument('--end', default='2025-09-30', help='End date')
-    parser.add_argument('--model', choices=['xgboost'], 
+    parser.add_argument('--model', choices=['xgboost'],
                        default='xgboost', help='Model type')
     parser.add_argument('--window', type=int, default=252, help='Training window in trading days')
     parser.add_argument('--retrain', action='store_true', help='Force retraining of models before evaluation')
     parser.add_argument('--model-path', type=str, default=None, help='Custom path to model file (for parallel execution)')
-    
+    parser.add_argument('--threshold', type=float, default=0.40,
+                       help='Minimum ML score for trade entry (default 0.40, matches training)')
+
     args = parser.parse_args()
-    
-    bt = MLBacktest(model_type=args.model, retrain=args.retrain, custom_model_path=args.model_path)
+
+    bt = MLBacktest(model_type=args.model, retrain=args.retrain, custom_model_path=args.model_path,
+                   signal_threshold=args.threshold)
     bt.run(args.start, args.end, train_window=args.window)
 
 

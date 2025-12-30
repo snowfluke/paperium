@@ -54,7 +54,8 @@ class TradingModel:
             self.use_gpu = False
 
         self.use_gen7_features = use_gen7_features
-        self.feature_engineer = FeatureEngineer(config, use_gen7_features=use_gen7_features)
+        # Auto-detect Hour-0 features (GEN8) if available in database
+        self.feature_engineer = FeatureEngineer(config, use_gen7_features=use_gen7_features, use_hour0_features='auto')
         self.model = None
         self.feature_names = None
         self.last_trained = None

@@ -64,14 +64,16 @@ def setup_menu():
     clear_screen()
     console.print(Panel.fit("[bold yellow]Initial Setup & Data Prep[/bold yellow]", border_style="yellow"))
     
-    console.print("\n[dim]Prepare your environment and sync market action[/dim]\n")
+    console.print("\n[dim]Prepare your environment and sync market data[/dim]\n")
     console.print("1. [bold cyan]Clean Universe[/bold cyan] (Filter illiquid/suspended stocks)")
-    console.print("2. [bold magenta]Sync Stock Data[/bold magenta] (Fetch 5 years of history via YF)")
-    console.print("3. [bold green]Download IHSG Index[/bold green] (For Gen 7 crash detection)")
+    console.print("2. [bold magenta]Sync Stock Data[/bold magenta] (Fetch 5 years of daily history)")
+    console.print("3. [bold green]Download IHSG Index[/bold green] (For crash detection)")
+    console.print("4. [bold yellow]Analyze Hour-0 Patterns[/bold yellow] (Fetch hourly & calculate metrics)")
+    console.print("5. [bold red]Clear Cache[/bold red] (Delete .cache folder)")
     console.print("B. Back to Main Menu")
 
 
-    choice = Prompt.ask("\nSelect setup action", choices=["1", "2", "3", "B", "b"], default="1")
+    choice = Prompt.ask("\nSelect setup action", choices=["1", "2", "3", "4", "5", "B", "b"], default="1")
 
     if choice == "1":
         console.print("\n[yellow]Running: uv run python scripts/clean_universe.py[/yellow]\n")
@@ -83,6 +85,33 @@ def setup_menu():
         days = IntPrompt.ask("Days of IHSG history to download", default=1825)
         console.print(f"\n[yellow]Running: uv run python scripts/download_ihsg.py --days {days}[/yellow]\n")
         subprocess.run(["uv", "run", "python", "scripts/download_ihsg.py", "--days", str(days)])
+    elif choice == "4":
+        from rich.prompt import Confirm
+        use_all = Confirm.ask("Analyze all tickers from universe?", default=True)
+
+        if use_all:
+            days = IntPrompt.ask("Days of hourly data to fetch (max 60)", default=60)
+            console.print(f"\n[yellow]Running: uv run python scripts/analyze_hour0.py --days {days}[/yellow]\n")
+            console.print("[dim]⏱ This will fetch hourly data with rate limiting (all stocks = ~5 minutes)[/dim]\n")
+            subprocess.run(["uv", "run", "python", "scripts/analyze_hour0.py", "--days", str(days)])
+        else:
+            stocks = IntPrompt.ask("Number of stocks to analyze", default=200)
+            days = IntPrompt.ask("Days of hourly data to fetch (max 60)", default=60)
+            console.print(f"\n[yellow]Running: uv run python scripts/analyze_hour0.py --stocks {stocks} --days {days}[/yellow]\n")
+            console.print(f"[dim]⏱ This will fetch hourly data with rate limiting ({stocks} stocks = ~{stocks // 10 * 3 // 60} minutes)[/dim]\n")
+            subprocess.run(["uv", "run", "python", "scripts/analyze_hour0.py", "--stocks", str(stocks), "--days", str(days)])
+    elif choice == "5":
+        import shutil
+        if os.path.exists(".cache"):
+            from rich.prompt import Confirm
+            confirm = Confirm.ask("\n[red]⚠  Delete .cache folder? This cannot be undone.[/red]")
+            if confirm:
+                shutil.rmtree(".cache")
+                console.print("[green]✓ Cache cleared[/green]")
+            else:
+                console.print("[dim]Cancelled[/dim]")
+        else:
+            console.print("[dim].cache folder does not exist[/dim]")
     elif choice.upper() == "B":
         return
 

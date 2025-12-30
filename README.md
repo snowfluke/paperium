@@ -52,26 +52,83 @@ uv run python run.py
 ## Quick Start Guide
 
 ### 0. Initial Setup & Data Prep
-Before training or running the bot, you need clean data. Paperium now features Hourly Smart Caching to ensure you always have the latest data without hitting API limits.
+Before training or running the bot, you need clean data. Use the dashboard for a guided setup experience.
 
+**Via Dashboard (Recommended):**
+```bash
+uv run python run.py
+# → Select "Initial Setup & Data Prep"
+# → Run options 1-3 in order
+```
+
+**Manual Setup:**
 ```bash
 # 1. Clean the stock list (removes illiquid/suspended stocks)
 uv run python scripts/clean_universe.py
 
-# 2. Fetch historical data (fills your database with years of price action)
+# 2. Fetch 5 years of daily historical data
 uv run python scripts/sync_data.py
+
+# 3. Download IHSG index for market crash detection (Gen 7+)
+uv run python scripts/download_ihsg.py --days 1825
 ```
+
+### 0.1 Weekly Hour-0 Pattern Analysis (Optional - Enhances Model)
+**What it does:** Fetches real intraday (hourly) data to capture the IDX Session-1 "pop and fade" pattern (9-11 AM). This adds 5 powerful features to your model based on actual hourly price action.
+
+**When to run:** Weekly (every Monday morning) to keep Hour-0 metrics fresh.
+
+**How to run:**
+```bash
+# Via Dashboard
+uv run python run.py
+# → Select "Initial Setup & Data Prep"
+# → Select "4. Analyze Hour-0 Patterns"
+# → Analyze all tickers? Yes (default)
+# → Days: 60 (max available from Yahoo Finance)
+# → Wait ~5 minutes (safe rate limiting: 10 stocks every 3 seconds)
+
+# Or via command line
+# All tickers (default - fetches from universe dynamically)
+uv run python scripts/analyze_hour0.py --days 60
+
+# Or for faster testing (top 200 liquid stocks only):
+uv run python scripts/analyze_hour0.py --stocks 200 --days 60
+```
+
+**What you get:**
+- 5 new features: `h0_spike_pct`, `h0_fade_pct`, `h0_net_pct`, `h0_spike_is_day_high`, `h0_spike_to_close`
+- Metrics stored in database (automatically used by training/eval/signals)
+- Statistics showing average spike/fade patterns
+
+**Safety:**
+- Rate limited to prevent Yahoo Finance bans (10 stocks/batch, 3 sec delay)
+- Only fetches 60 days (Yahoo's hourly data limit)
+- Default analyzes all tickers from universe dynamically (~956 tickers = ~5 minutes)
+- Can reduce to top N liquid stocks for faster analysis (e.g., 200 = ~2 minutes)
+
+**Note:** Models automatically detect and use Hour-0 features when available. No special flags needed for training.
 
 
 ### 1. Model Training
-Train the global XGBoost model using historical data:
+Train the global XGBoost model using historical data. The system automatically detects and uses Hour-0 features if available.
+
 ```bash
 # Targeted training (90 days eval)
 uv run python scripts/train.py --days 90 --target 0.85
 
 # Max window training (starting from previous Dec 1st)
 uv run python scripts/train.py --days max --train-window max
+
+# Training automatically uses:
+# - GEN 7 (51 features): Intraday proxies + crash filter + volatility targeting
+# - GEN 8 (56 features): GEN 7 + Hour-0 metrics (if hour0_metrics table exists)
 ```
+
+**Feature Set Auto-Detection:**
+- Training automatically detects Hour-0 data and upgrades to GEN 8
+- No flags needed - just run Hour-0 analysis weekly and train as usual
+- Banner shows which generation is active (GEN 7 or GEN 8)
 
 **Training Session Tracking:**
 Each training session automatically creates a JSON file in `models/training_session_YYYYMMDD_HHMMSS.json` that captures:

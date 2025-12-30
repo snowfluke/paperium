@@ -406,15 +406,6 @@ class MorningSignals:
             
         top_candidates = buy_signals.sort_values('composite_score', ascending=False).head(10)
         
-        # Debug: Print top candidates for confirmation
-        if not top_candidates.empty:
-            console.print("\n[dim]Top Candidates by ML Score (Aligned with Train/Eval):[/dim]")
-            for _, row in top_candidates.iterrows():
-                ml_score = row.get('ml_score', 0.0)
-                # Convert ML score to probability for display
-                ml_prob = (ml_score / 2.0) + 0.5  # [-1,1] → [0,1]
-                console.print(f"  [dim]{row['ticker']}: ML Score {ml_score:.3f} (Prob {ml_prob:.1%})[/dim]")
-        
         # Phase 3: Final signal generation with sizing
         new_signals = []
         max_total_positions = 15 

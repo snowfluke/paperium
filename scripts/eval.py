@@ -82,6 +82,10 @@ class MLBacktest:
         self.screener = Screener(config)
         self.use_gen7_features = use_gen7_features
 
+        # Create shared FeatureEngineer to avoid repeated DB queries during pooling
+        from ml.features import FeatureEngineer
+        self.shared_feature_engineer = FeatureEngineer(config.ml, use_gen7_features=use_gen7_features, use_hour0_features='auto')
+
         # Trading parameters
         self.initial_capital = 100_000_000
         self.max_positions = 10
@@ -252,11 +256,10 @@ class MLBacktest:
                 train_data = train_data.tail(min(train_window, len(train_data)))
                 train_data = self._add_features(train_data)
 
-                # Use FeatureEngineer to get X, y, returns
-                temp_model = TradingModel(config.ml, use_gen7_features=self.use_gen7_features)
-                X, y, returns = temp_model.feature_engineer.create_features(
+                # Use shared FeatureEngineer to avoid repeated DB queries (CRITICAL for Hour-0 features)
+                X, y, returns = self.shared_feature_engineer.create_features(
                     train_data,
-                    target_horizon=temp_model.feature_engineer.target_horizon,
+                    target_horizon=self.shared_feature_engineer.target_horizon,
                     include_raw_return=True
                 )
                 pool_X.append(X)
@@ -273,17 +276,29 @@ class MLBacktest:
             pool_time = time.time() - pool_start
             log(f"  [green]Pooling completed in {pool_time:.2f}s[/green]")
 
+            # Check for duplicate columns (bug with Hour-0 features)
+            if X_combined.columns.duplicated().any():
+                dup_cols = X_combined.columns[X_combined.columns.duplicated()].tolist()
+                log(f"  [red]WARNING: Duplicate columns found: {dup_cols}[/red]")
+                X_combined = X_combined.loc[:, ~X_combined.columns.duplicated()]
+                log(f"  [yellow]Removed duplicates, new shape: {X_combined.shape}[/yellow]")
+
             # Cache for next iteration
             self.pooled_train_data = (X_combined, y_combined, ret_combined)
-        
+
         # Clean data for XGBoost (remove any remaining NaN or Inf)
-        valid_idx = X_combined.replace([np.inf, -np.inf], np.nan).dropna().index
-        X_combined = X_combined.loc[valid_idx]
-        y_combined = y_combined.loc[valid_idx]
-        ret_combined = ret_combined.loc[valid_idx]
+        cleanup_start = time.time()
+        # More efficient: Use boolean mask instead of index slicing
+        valid_mask = ~X_combined.replace([np.inf, -np.inf], np.nan).isna().any(axis=1)
+
+        filter_start = time.time()
+        X_combined = X_combined[valid_mask]
+        y_combined = y_combined[valid_mask]
+        ret_combined = ret_combined[valid_mask]
         
         # --- TRAINING REFINEMENT: NOISE DOWNSAMPLING ---
         # Discard 50% of "boring" days (|return| < 0.5%) to reduce noise bias
+        downsample_start = time.time()
         noise_mask = (ret_combined.abs() < 0.005)
         keep_mask = ~noise_mask
 
@@ -316,11 +331,14 @@ class MLBacktest:
         # Train Global XGBoost
         if self.model_type == 'xgboost':
             try:
+                model_create_start = time.time()
                 self.global_xgb = TradingModel(config.ml, use_gen7_features=self.use_gen7_features)
+
                 self.global_xgb.feature_names = X_combined.columns.tolist()
 
                 # Gen 6: Train fresh model each iteration
                 # Warm start was causing issues - each iteration should compete fairly
+                xgb_create_start = time.time()
                 self.global_xgb.model = self.global_xgb._create_model()
                 log("  [cyan]Training fresh XGBoost model...[/cyan]")
 

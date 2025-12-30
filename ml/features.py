@@ -40,14 +40,24 @@ class FeatureEngineer:
         'intraday_momentum',     # Close position in daily range - strength indicator
         'fade_signal',           # Combined: gap exhaustion + weak close + upper shadow
     ]
+
+    # GEN 8 Feature Set: Adds TRUE Hour-0 metrics from intraday data (optional)
+    GEN8_FEATURES = GEN7_FEATURES + [
+        'h0_spike_pct',          # Actual 9-10 AM spike from hourly data
+        'h0_fade_pct',           # Actual 10-11 AM fade from hourly data
+        'h0_net_pct',            # Net Hour-0 movement
+        'h0_spike_is_day_high',  # Whether 10 AM was day's high
+        'h0_spike_to_close',     # Spike to close relationship
+    ]
     
-    def __init__(self, config=None, use_gen7_features=True):
+    def __init__(self, config=None, use_gen7_features=True, use_hour0_features='auto'):
         """
         Initialize feature engineer.
 
         Args:
             config: MLConfig object (optional)
             use_gen7_features: If True, use GEN7 feature set with Session-1 features (default True)
+            use_hour0_features: 'auto' (detect from DB), True, or False (default 'auto')
         """
         if config:
             self.feature_lags = config.feature_lags
@@ -59,8 +69,47 @@ class FeatureEngineer:
         # Initialize sub-modules for internal indicator calculation
         self.technical = TechnicalIndicators()
 
+        # Auto-detect Hour-0 features if set to 'auto'
+        if use_hour0_features == 'auto':
+            use_hour0_features = self._check_hour0_available()
+
         # Select feature set
-        self.feature_set = self.GEN7_FEATURES if use_gen7_features else self.LEGACY_46_FEATURES
+        if use_hour0_features:
+            self.feature_set = self.GEN8_FEATURES
+            self.use_hour0 = True
+        elif use_gen7_features:
+            self.feature_set = self.GEN7_FEATURES
+            self.use_hour0 = False
+        else:
+            self.feature_set = self.LEGACY_46_FEATURES
+            self.use_hour0 = False
+
+    # Class-level cache for Hour-0 availability check
+    _hour0_cache = None
+
+    def _check_hour0_available(self) -> bool:
+        """Check if Hour-0 metrics table exists in database (cached)."""
+        # Use cached result if available
+        if FeatureEngineer._hour0_cache is not None:
+            return FeatureEngineer._hour0_cache
+
+        try:
+            from data.storage import DataStorage
+            from config import config
+            import sqlite3
+
+            storage = DataStorage(config.data.db_path)
+            with sqlite3.connect(storage.db_path) as conn:
+                table_check = conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table' AND name='hour0_metrics'"
+                ).fetchone()
+                result = table_check is not None
+                # Cache the result
+                FeatureEngineer._hour0_cache = result
+                return result
+        except Exception:
+            FeatureEngineer._hour0_cache = False
+            return False
     
     def create_features(
         self, 
@@ -87,15 +136,19 @@ class FeatureEngineer:
         
         # 1. Base technical indicators (SMA, RSI, MACD, ATR)
         df = self._add_base_indicators(df)
-        
+
         # 2. Price-based features (Volatility, Returns, MA Relatives)
         df = self._add_price_features(df)
-        
+
         # 3. Lagged features (Returns, Indicators)
         df = self._add_lagged_features(df)
-        
+
         # 4. Calendar features (Day of week, Month start/end)
         df = self._add_calendar_features(df)
+
+        # 5. Hour-0 features (if enabled and data available)
+        if self.use_hour0:
+            df = self._add_hour0_features(df)
         
         # 5. Drop rows with NaN
         df = df.dropna()
@@ -263,7 +316,92 @@ class FeatureEngineer:
                 df[f'dow_{day}'] = (df['day_of_week'] == day).astype(int)
         
         return df
-    
+
+    def _add_hour0_features(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Add Hour-0 features from intraday metrics database.
+        Merges actual 9-11 AM metrics if available.
+        """
+        import time
+        start_time = time.time()
+
+        if 'ticker' not in df.columns or 'date' not in df.columns:
+            # Fill with zeros if can't merge
+            logger.debug(f"Hour-0: No ticker/date columns, filling with zeros")
+            for feat in ['h0_spike_pct', 'h0_fade_pct', 'h0_net_pct', 'h0_spike_is_day_high', 'h0_spike_to_close']:
+                df[feat] = 0.0
+            return df
+
+        try:
+            from data.storage import DataStorage
+            from config import config
+            import sqlite3
+
+            storage = DataStorage(config.data.db_path)
+            logger.debug(f"Hour-0: Starting feature merge for {len(df)} rows")
+
+            # Check if hour0_metrics table exists
+            with sqlite3.connect(storage.db_path) as conn:
+                table_check = conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table' AND name='hour0_metrics'"
+                ).fetchone()
+
+                if not table_check:
+                    # Table doesn't exist yet - fill with zeros
+                    for feat in ['h0_spike_pct', 'h0_fade_pct', 'h0_net_pct', 'h0_spike_is_day_high', 'h0_spike_to_close']:
+                        df[feat] = 0.0
+                    return df
+
+            # Get ticker for this dataframe
+            ticker = df['ticker'].iloc[0] if 'ticker' in df.columns else None
+            if not ticker:
+                logger.debug(f"Hour-0: No ticker found, filling with zeros")
+                for feat in ['h0_spike_pct', 'h0_fade_pct', 'h0_net_pct', 'h0_spike_is_day_high', 'h0_spike_to_close']:
+                    df[feat] = 0.0
+                return df
+
+            # Load Hour-0 metrics for this ticker
+            query_start = time.time()
+            with sqlite3.connect(storage.db_path) as conn:
+                h0_data = pd.read_sql_query(
+                    "SELECT * FROM hour0_metrics WHERE ticker = ?",
+                    conn,
+                    params=(ticker,)
+                )
+            logger.debug(f"Hour-0: DB query for {ticker} took {time.time() - query_start:.3f}s, got {len(h0_data)} rows")
+
+            if h0_data.empty:
+                # No data for this ticker - fill with zeros
+                for feat in ['h0_spike_pct', 'h0_fade_pct', 'h0_net_pct', 'h0_spike_is_day_high', 'h0_spike_to_close']:
+                    df[feat] = 0.0
+                return df
+
+            # Merge with main dataframe
+            merge_start = time.time()
+            h0_data['date'] = pd.to_datetime(h0_data['date'])
+            df['date'] = pd.to_datetime(df['date'])
+
+            df = df.merge(
+                h0_data[['date', 'h0_spike_pct', 'h0_fade_pct', 'h0_net_pct', 'h0_spike_is_day_high', 'h0_spike_to_close']],
+                on='date',
+                how='left'
+            )
+            logger.debug(f"Hour-0: Merge took {time.time() - merge_start:.3f}s")
+
+            # Fill missing values with 0
+            for feat in ['h0_spike_pct', 'h0_fade_pct', 'h0_net_pct', 'h0_spike_is_day_high', 'h0_spike_to_close']:
+                df[feat] = df[feat].fillna(0.0)
+
+            logger.debug(f"Hour-0: Total feature merge time: {time.time() - start_time:.3f}s")
+
+        except Exception as e:
+            logger.warning(f"Failed to add Hour-0 features: {e}")
+            # Fill with zeros on error
+            for feat in ['h0_spike_pct', 'h0_fade_pct', 'h0_net_pct', 'h0_spike_is_day_high', 'h0_spike_to_close']:
+                df[feat] = 0.0
+
+        return df
+
     def _get_feature_columns(self, df: pd.DataFrame) -> List[str]:
         """Get list of feature column names."""
         # Exclude non-feature columns
@@ -296,6 +434,9 @@ class FeatureEngineer:
         df = self._add_price_features(df)
         df = self._add_lagged_features(df)
         df = self._add_calendar_features(df)
+
+        if self.use_hour0:
+            df = self._add_hour0_features(df)
 
         X = df[self.feature_set].fillna(0)
 

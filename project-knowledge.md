@@ -95,7 +95,7 @@ min_profit_pct: float = 0.15       # 15% realistic upside target
 ```python
 n_estimators: int = 500        # Many weak learners (low learning rate compensates)
 max_depth: int = 4             # Shallower trees (was 5) - prevents overfitting
-learning_rate: float = 0.02    # Very slow learning (was 0.1) - gradual improvement
+learning_rate: float = 0.05    # Very slow learning (was 0.1) - gradual improvement
 min_child_weight: int = 5      # Higher threshold (was 3) - more conservative splits
 subsample: float = 0.7         # 70% data per tree (was 0.8) - more randomness
 colsample_bytree: float = 0.7  # 70% features per tree (was 0.8) - more diversity
@@ -212,6 +212,7 @@ Each epoch you see the model get better as more trees are added. Best model is a
 ### Data Quality Filters
 
 **Updated liquidity requirements (config.portfolio):**
+
 - `min_avg_volume: 2M shares` (was 1M) - More liquid stocks only
 - `min_market_cap: 2T IDR` (was 1T) - Larger, more stable companies
 - `min_data_points: 252` (was 100) - Require 1 year of history minimum
@@ -225,25 +226,30 @@ Each epoch you see the model get better as more trees are added. Best model is a
 ### Base 51 Features
 
 **Price & Returns:**
+
 - Returns: 1d, 2d, 3d, 5d, 10d, 20d, log_return
 - Moving Averages: SMA 20/50, price_to_ma10/20/50
 - Technical: RSI, MACD (line/signal/hist), ATR
 - Volatility: 5d/20d vol, vol_ratio, vol_zscore
 
 **Volume Indicators (NEW - Added 2024-12-30):**
+
 - Basic: volume_sma, rel_volume, volume_change, relative_volume
 - **Advanced:** MFI (Money Flow Index), CMF (Chaikin Money Flow), ADL ROC (Accumulation/Distribution)
 - **Derived:** OBV trend, volume-price alignment
 
 **Price Patterns:**
+
 - Intraday: hl_range, gap, close_position, intraday_range_pct
 - Momentum: mean_reversion_strength
 
 **Lagged Features:**
+
 - Returns: return_lag_1/2/3/5 (added lag_10/15/20 to feature_lags config)
 - Indicators: rsi_lag1, rsi_change
 
 **Calendar:**
+
 - is_month_start/end, dow_0/1/2/3/4 (one-hot day of week)
 
 ### Intraday Behavior Proxies (5 features)
@@ -747,9 +753,11 @@ for epoch in range(1, epochs + 1):
 ### Alternative Strategies
 
 **Ultra-Selective (0.70 threshold):**
+
 - Win Rate: 90-95%, Trades: 5-10/month, Very conservative
 
 **Moderate (0.40 threshold):**
+
 - Win Rate: 70-80%, Trades: 20-30/month, More aggressive
 
 ### Legacy Metrics (Moderate Strategy - 0.40 threshold)

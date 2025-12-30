@@ -57,7 +57,7 @@ class MLConfig:
     # Regularization allows using more trees without overfitting
     n_estimators: int = 500
     max_depth: int = 4
-    learning_rate: float = 0.02
+    learning_rate: float = 0.05
     min_child_weight: int = 5
 
     # Regularization parameters (prevent overfitting)

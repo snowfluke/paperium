@@ -18,6 +18,11 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# Optional: Advanced features (not required for core system)
+advanced = [
+    "lightgbm>=4.6.0",
+    "catboost>=1.2.8",
+]
 dev = [
     "pytest>=7.4.0",
 ]

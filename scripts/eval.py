@@ -62,7 +62,7 @@ class MLBacktest:
     
     def __init__(self, model_type: str = 'xgboost', retrain: bool = False, custom_model_path: Optional[str] = None,
                  sl_atr_mult: float = 2.0, tp_atr_mult: float = 3.0, signal_threshold: float = 0.70,
-                 use_gen7_features: bool = True):
+                 use_gen7_features: bool = True, use_gen9_features: bool = False):
         """
         Args:
             model_type: 'xgboost'
@@ -73,6 +73,7 @@ class MLBacktest:
             tp_atr_mult: Take profit ATR multiplier (dynamic per iteration)
             signal_threshold: Minimum ML score to trigger a trade (default 0.70 for high conviction)
             use_gen7_features: If True, use GEN7 feature set with Session-1 features (default True)
+            use_gen9_features: If True, use GEN9 feature set with S/D + microstructure (default False)
         """
         self.storage = DataStorage(config.data.db_path)
         self.sector_mapping = get_sector_mapping()
@@ -81,10 +82,11 @@ class MLBacktest:
         self.custom_model_path = custom_model_path
         self.screener = Screener(config)
         self.use_gen7_features = use_gen7_features
+        self.use_gen9_features = use_gen9_features
 
         # Create shared FeatureEngineer to avoid repeated DB queries during pooling
         from ml.features import FeatureEngineer
-        self.shared_feature_engineer = FeatureEngineer(config.ml, use_gen7_features=use_gen7_features, use_hour0_features='auto')
+        self.shared_feature_engineer = FeatureEngineer(config.ml, use_gen7_features=use_gen7_features, use_hour0_features='auto', use_gen9_features=use_gen9_features)
 
         # Trading parameters
         self.initial_capital = 100_000_000

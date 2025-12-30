@@ -143,10 +143,10 @@ def view_training_menu():
 def train_menu():
     clear_screen()
     console.print(Panel.fit("[bold cyan]Model Training Lab[/bold cyan]", border_style="cyan"))
-    
+
     # Customizable parameters
     console.print("\n[dim]Configure training parameters:[/dim]\n")
-    
+
     # Show current champion info
     try:
         import json
@@ -158,30 +158,31 @@ def train_menu():
         current_wr = metadata.get('xgboost', {}).get('win_rate', 0)
         current_wl = metadata.get('xgboost', {}).get('wl_ratio', 0)
         current_score = metadata.get('xgboost', {}).get('combined_score', current_wr)
-        console.print(f"[cyan]Current Champion:[/cyan] WR={current_wr:.1%}, W/L={current_wl:.2f}x, Score={current_score:.1%}\n")
+        current_gen = metadata.get('xgboost', {}).get('generation', 'GEN 7')
+        console.print(f"[cyan]Current Champion ({current_gen}):[/cyan] WR={current_wr:.1%}, W/L={current_wl:.2f}x, Score={current_score:.1%}\n")
     except:
         pass
-    
+
     target = Prompt.ask("Target Combined Score (Win Rate + W/L Ratio, 0.0-1.0)", default="0.85")
     days = Prompt.ask("Evaluation days (number or 'max')", default="365")
     train_window = Prompt.ask("Training window (number or 'max')", default="max")
     max_iter = IntPrompt.ask("Max optimization iterations", default=10)
-    
+
     use_gpu = Confirm.ask("\nUse GPU acceleration?", default=True)
     force = Confirm.ask("Replace champion if better?", default=True)
-    
+
     cmd = ["uv", "run", "python", "scripts/train.py",
            "--target", target,
            "--days", days,
            "--train-window", train_window,
            "--max-iter", str(max_iter)]
-    
+
     if force:
         cmd.append("--force")
-    
+
     if use_gpu:
         cmd.append("--gpu")
-    
+
     console.print(f"\n[yellow]Executing: {' '.join(cmd)}[/yellow]\n")
     subprocess.run(cmd)
 

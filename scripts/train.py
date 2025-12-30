@@ -20,18 +20,19 @@ from ml.features import FeatureEngineer
 console = Console()
 
 def main():
-    parser = argparse.ArgumentParser(description='Targeted Model Training (Gen 5)')
+    parser = argparse.ArgumentParser(description='Iterative Model Training')
     parser.add_argument('--days', type=str, default='365', help='Evaluation period in calendar days or "max"')
     parser.add_argument('--train-window', type=str, default='max', help='Training window in trading days or "max"')
     parser.add_argument('--target', type=float, default=0.85, help='Target Combined Score (0.0 to 1.0)')
-    # Gen 5 Ultimate Specs
-    parser.add_argument('--max-depth', type=int, default=5, help='XGBoost max tree depth (Conservative: 5)')
-    parser.add_argument('--n-estimators', type=int, default=100, help='Number of boosting rounds (Conservative: 100)')
+    # Training specs
+    parser.add_argument('--max-depth', type=int, default=5, help='XGBoost max tree depth (default: 5)')
+    parser.add_argument('--n-estimators', type=int, default=100, help='Number of boosting rounds (default: 100)')
 
     parser.add_argument('--force', action='store_true', help='Replace champion if better.')
     parser.add_argument('--max-iter', type=int, default=10, help='Maximum optimization iterations')
     parser.add_argument('--gpu', action='store_true', help='Use GPU acceleration')
-    parser.add_argument('--legacy', action='store_true', help='Use legacy Gen 6 features (46 features) instead of Gen 7 (50 features)')
+    parser.add_argument('--legacy', action='store_true', help='Use legacy Gen 6 features (46 features)')
+    parser.add_argument('--gen9', action='store_true', help='Use GEN9 features (81 features)')
 
     args = parser.parse_args()
     
@@ -66,15 +67,30 @@ def main():
         eval_days = int(args.days)
         train_window = int(args.train_window)
 
-    console.print(f"[bold cyan]Starting Targeted Training for XGBOOST (Gen 5)[/bold cyan]")
+    # Determine generation (simple: default to GEN7/8)
+    if args.legacy:
+        gen_label = "GEN 6"
+        use_gen7 = False
+        use_gen9 = False
+    elif args.gen9:
+        gen_label = "GEN 9"
+        use_gen7 = True
+        use_gen9 = True
+    else:
+        gen_label = "GEN 7/8"
+        use_gen7 = True
+        use_gen9 = False
+
+    console.print(f"[bold cyan]Starting Targeted Training for XGBOOST ({gen_label})[/bold cyan]")
     console.print(f"Target Score: [green]{args.target:.1%}[/green] | Max Iter: {args.max_iter}")
 
     # Initialize training session file
     import json
     session_id = datetime.now().strftime('%Y%m%d_%H%M%S')
-    session_file = f"models/training_session_{session_id}.json"
+    session_file = f"models/training_session_{gen_label.lower().replace(' ', '_')}_{session_id}.json"
     session_data = {
         "session_id": session_id,
+        "generation": gen_label,
         "start_time": datetime.now().isoformat(),
         "parameters": {
             "target_score": args.target,
@@ -85,25 +101,24 @@ def main():
             "train_window": train_window,
             "use_gpu": args.gpu,
             "force_replace": args.force,
+            "use_gen9_features": use_gen9,
             "use_gen7_features": not args.legacy
         },
         "iterations": []
     }
 
-    # Show Gen 7 features banner
-    if args.legacy:
-        console.print("[yellow]⚠ LEGACY MODE: Using Gen 6 (46 features)[/yellow]")
-    else:
-        feature_eng = FeatureEngineer(config.ml, use_gen7_features=True, use_hour0_features='auto')
-        feature_count = len(feature_eng.feature_set)
-        gen_label = "GEN 8" if feature_count > 50 else "GEN 7"
+    # Show feature set banner
+    feature_eng = FeatureEngineer(config.ml, use_gen7_features=use_gen7, use_hour0_features='auto', use_gen9_features=use_gen9)
+    feature_count = len(feature_eng.feature_set)
 
-        console.print(f"[bold green]✓ {gen_label} FEATURES ({feature_count} features):[/bold green]")
-        console.print("  • Intraday Behavior Proxies (gap exhaustion, fade detection)")
-        console.print("  • IHSG Market Crash Filter (avoid trades during crashes)")
-        console.print("  • ATR-based Volatility Targeting (consistent position sizing)")
-        if feature_count > 50:
-            console.print("  • [cyan]Hour-0 Metrics: True intraday patterns detected![/cyan]")
+    console.print(f"[bold green]✓ {gen_label} ({feature_count} features)[/bold green]")
+    if use_gen9:
+        console.print("  • Supply/Demand + Microstructure + Order Flow")
+    elif use_gen7:
+        console.print("  • Intraday Proxies + Crash Filter + Hour-0 (auto-detect)")
+    else:
+        console.print("  • Basic technical indicators")
+
     console.print(f"[dim]Session file: {session_file}[/dim]")
 
     # Show GPU warning once at the start
@@ -113,7 +128,7 @@ def main():
             console.print("[yellow]⚠ XGBoost MPS (Metal) acceleration can be unstable on some Mac environments. Using high-performance CPU ('hist') instead.[/yellow]")
 
     # Phase 0: Data Prep
-    backtester = MLBacktest(use_gen7_features=not args.legacy)
+    backtester = MLBacktest(use_gen7_features=use_gen7, use_gen9_features=use_gen9)
     end_date = datetime.now().strftime('%Y-%m-%d')
 
     # When using 'max', align to month boundaries for cleaner evaluation

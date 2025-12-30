@@ -16,29 +16,193 @@ class Screener:
     Filters out noise and low-probability setups before heavy ML processing.
     """
     
-    def __init__(self, config=None):
+    def __init__(self, config=None, enable_liquidity_tiers=True):
         self.min_price = 50  # No penny stocks below 50
-        self.min_volume = 1_000_000  # Minimum liquidity 
+        self.min_volume = 1_000_000  # Minimum liquidity
+        self.enable_liquidity_tiers = enable_liquidity_tiers
+
+        # Liquidity Tiers (IDX stocks)
+        # Tier 1: Highest liquidity, institutional favorites
+        self.tier1_tickers = {
+            # IDX30 Core (Most liquid blue chips)
+            'BBCA.JK', 'BBRI.JK', 'BMRI.JK', 'TLKM.JK', 'ASII.JK',
+            'UNVR.JK', 'HMSP.JK', 'ICBP.JK', 'INDF.JK', 'KLBF.JK',
+            'GGRM.JK', 'SMGR.JK', 'UNTR.JK', 'INCO.JK', 'ADRO.JK',
+            'PTBA.JK', 'BBTN.JK', 'MNCN.JK', 'BBNI.JK', 'JSMR.JK',
+            # Additional high-volume stocks
+            'EMTK.JK', 'GOTO.JK', 'AMMN.JK', 'BUKA.JK'
+        }
+
+        # Tier 2: Medium liquidity, growth stocks
+        # Auto-detected based on volume criteria 
 
         
+    def classify_liquidity_tier(self, ticker: str, df: pd.DataFrame) -> int:
+        """
+        Classify stock into liquidity tier.
+
+        Args:
+            ticker: Stock ticker
+            df: Price DataFrame
+
+        Returns:
+            Tier number (1=highest, 2=medium, 3=low)
+        """
+        # Tier 1: Predefined blue chips
+        if ticker in self.tier1_tickers:
+            return 1
+
+        # Calculate average volume
+        if len(df) < 20:
+            return 3
+
+        avg_volume = df['volume'].rolling(20).mean().iloc[-1]
+        avg_value = avg_volume * df['close'].iloc[-1]  # IDR value
+
+        # Tier 2: High volume (>5M shares AND >5B IDR daily)
+        if avg_volume >= 5_000_000 and avg_value >= 5_000_000_000:
+            return 2
+
+        # Tier 3: Everything else
+        return 3
+
     def screen_stocks(self, data_map: Dict[str, pd.DataFrame]) -> List[str]:
         """
         Screen all available stocks for candidates.
-        
+
         Args:
             data_map: Dictionary mapping ticker to OHLCV DataFrame
-            
+
         Returns:
             List of tickers that passed the screen
         """
         passed = []
-        
+
         for ticker, df in data_map.items():
-            if self._check_criteria(df, ticker):
-                passed.append(ticker)
-                
+            # Tier-aware screening
+            if self.enable_liquidity_tiers:
+                tier = self.classify_liquidity_tier(ticker, df)
+                if self._check_criteria_tiered(df, ticker, tier):
+                    passed.append(ticker)
+            else:
+                if self._check_criteria(df, ticker):
+                    passed.append(ticker)
+
         return passed
-    
+
+    def _check_criteria_tiered(self, df: pd.DataFrame, ticker: str, tier: int) -> bool:
+        """
+        Check criteria with tier-specific requirements.
+
+        Tier 1: Most relaxed (catch more opportunities in liquid stocks)
+        Tier 2: Balanced
+        Tier 3: Strict (filter heavily to avoid illiquid traps)
+
+        Args:
+            df: Price DataFrame
+            ticker: Stock ticker
+            tier: Liquidity tier (1-3)
+
+        Returns:
+            True if passes tier-specific criteria
+        """
+        if df.empty or len(df) < 200:
+            return False
+
+        try:
+            latest = df.iloc[-1]
+
+            # 1. Price check (common across tiers)
+            if latest['close'] < self.min_price:
+                return False
+
+            # 2. Liquidity check (tier-specific)
+            if latest['volume'] <= 0:
+                return False
+
+            avg_vol = df['volume'].rolling(20).mean().iloc[-1]
+
+            if tier == 1:
+                # Tier 1: Most lenient (already highly liquid)
+                if avg_vol < 500_000:  # Very low minimum
+                    return False
+            elif tier == 2:
+                # Tier 2: Standard
+                if avg_vol < self.min_volume:
+                    return False
+            else:  # tier == 3
+                # Tier 3: Strict (require higher volume for safety)
+                if avg_vol < self.min_volume * 1.5:
+                    return False
+
+            # 3. Volume spike check (tier-specific)
+            volume_ratio = latest['volume'] / avg_vol if avg_vol > 0 else 0
+
+            if tier == 1:
+                # Tier 1: No volume spike required (liquid stocks don't need confirmation)
+                pass
+            elif tier == 2:
+                # Tier 2: Prefer volume spike (>1.2x avg)
+                if volume_ratio < 1.2:
+                    return False
+            else:  # tier == 3
+                # Tier 3: Require strong volume spike (>1.5x avg)
+                if volume_ratio < 1.5:
+                    return False
+
+            # 4. Trend Check (common)
+            ema200 = df['close'].ewm(span=200).mean().iloc[-1]
+            if latest['close'] < ema200:
+                return False
+
+            # 5. Momentum Check - tier-specific thresholds
+            if 'rsi' not in df.columns:
+                delta = df['close'].diff()
+                gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
+                loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+                rs = gain / loss
+                rsi = 100 - (100 / (1 + rs))
+                current_rsi = rsi.iloc[-1]
+            else:
+                current_rsi = latest['rsi']
+
+            if tier == 1:
+                # Tier 1: Accept RSI > 45 (catch earlier)
+                if current_rsi < 45:
+                    return False
+            elif tier == 2:
+                # Tier 2: Standard RSI > 50
+                if current_rsi < 50:
+                    return False
+            else:  # tier == 3
+                # Tier 3: Require stronger momentum RSI > 55
+                if current_rsi < 55:
+                    return False
+
+            # 6. Volatility Check (common)
+            if 'atr' not in df.columns:
+                high_low = df['high'] - df['low']
+                high_close = pd.Series(np.abs(df['high'] - df['close'].shift()), index=df.index)
+                low_close = pd.Series(np.abs(df['low'] - df['close'].shift()), index=df.index)
+                tr = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
+                atr = tr.rolling(14).mean().iloc[-1]
+            else:
+                atr = latest['atr']
+
+            atr_pct = (atr / latest['close']) * 100
+            if atr_pct < 1.0:
+                return False
+
+            # 7. Circuit Breaker Check (common)
+            if not self._check_circuit_breaker(latest['close'], df['close'].shift(1).iloc[-1]):
+                return False
+
+            return True
+
+        except Exception as e:
+            logger.debug(f"Screening failed for {ticker}: {e}")
+            return False
+
     def _check_criteria(self, df: pd.DataFrame, ticker: str) -> bool:
         """
         Check if a single stock meets screening criteria.

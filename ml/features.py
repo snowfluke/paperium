@@ -16,10 +16,19 @@ class FeatureEngineer:
     """
     Creates features for machine learning models.
     Generates price-based, technical, and statistical features.
+
+    UNIVERSAL FEATURE SET: 56 features (base 51 + 5 intraday behavior proxies)
+    NO generation versioning - this is the single standard for all models.
+
+    Added 2024-12-30: Advanced volume indicators from 2024 research
+    - MFI (Money Flow Index)
+    - CMF (Chaikin Money Flow)
+    - ADL (Accumulation/Distribution Line)
+    - OBV trend and volume-price alignment
     """
-    
-    # EXACT 46-feature set expected by the champion model
-    LEGACY_46_FEATURES = [
+
+    # Base 51 features (technical indicators and price patterns)
+    BASE_FEATURES = [
         'return_1d', 'return_5d', 'return_20d', 'sma_20', 'sma_50', 'rsi',
         'macd', 'macd_signal', 'macd_hist', 'atr', 'volatility', 'volume_sma',
         'rel_volume', 'return_2d', 'return_3d', 'return_10d', 'log_return',
@@ -29,11 +38,14 @@ class FeatureEngineer:
         'volatility_zscore', 'intraday_range_pct', 'mean_reversion_strength',
         'return_lag_1', 'return_lag_2', 'return_lag_3', 'return_lag_5',
         'rsi_lag1', 'rsi_change', 'is_month_start', 'is_month_end',
-        'dow_0', 'dow_1', 'dow_2', 'dow_3', 'dow_4'
+        'dow_0', 'dow_1', 'dow_2', 'dow_3', 'dow_4',
+        # Volume-based indicators (5 new features from 2024 research)
+        'mfi', 'cmf', 'adl_roc', 'obv_trend', 'volume_price_trend'
     ]
 
-    # GEN 7 Feature Set: Adds Intraday Behavior Proxies
-    GEN7_FEATURES = LEGACY_46_FEATURES + [
+    # Intraday behavior proxies (5 features)
+    # Detects weak intraday structure using OHLC patterns
+    INTRADAY_FEATURES = [
         'upper_shadow_ratio',    # Upper wick / body - detects rejection at highs
         'gap_size',              # Gap magnitude (positive or negative)
         'gap_followthrough',     # Close vs Open after gap - measures gap strength
@@ -41,119 +53,28 @@ class FeatureEngineer:
         'fade_signal',           # Combined: gap exhaustion + weak close + upper shadow
     ]
 
-    # GEN 8 Feature Set: Adds TRUE Hour-0 metrics from intraday data (optional)
-    GEN8_FEATURES = GEN7_FEATURES + [
-        'h0_spike_pct',          # Actual 9-10 AM spike from hourly data
-        'h0_fade_pct',           # Actual 10-11 AM fade from hourly data
-        'h0_net_pct',            # Net Hour-0 movement
-        'h0_spike_is_day_high',  # Whether 10 AM was day's high
-        'h0_spike_to_close',     # Spike to close relationship
-    ]
+    # UNIVERSAL FEATURE SET (51 features total)
+    UNIVERSAL_FEATURES = BASE_FEATURES + INTRADAY_FEATURES
 
-    # GEN 9 Feature Set: Ultimate - Adds S/D zones + Microstructure + Order Flow
-    GEN9_FEATURES = GEN8_FEATURES + [
-        # Supply/Demand Zone Features (9 features)
-        'sd_score',              # Overall S/D voting score (-1 to +1)
-        'sd_demand_distance',    # Distance to nearest demand zone
-        'sd_demand_strength',    # Strength of nearest demand zone
-        'sd_supply_distance',    # Distance to nearest supply zone
-        'sd_supply_strength',    # Strength of nearest supply zone
-        'sd_demand_fresh',       # Is demand zone fresh (untested)?
-        'sd_supply_fresh',       # Is supply zone fresh (untested)?
-        'sd_zone_count',         # Total number of active zones
-        'sd_net_strength',       # Net strength (demand - supply)
-
-        # Market Microstructure (10 features)
-        'volume_profile_poc',    # Point of Control (price with most volume)
-        'volume_imbalance',      # Buy vs Sell volume proxy
-        'price_efficiency',      # Price movement per unit volume
-        'volume_weighted_price', # VWAP deviation
-        'large_trade_ratio',     # Ratio of large trades (>2x avg)
-        'volume_momentum',       # Rate of change in volume
-        'bid_ask_spread_proxy',  # High-Low / Close (liquidity proxy)
-        'tick_direction',        # Net up ticks vs down ticks
-        'absorption_score',      # Price resistance to volume
-        'exhaustion_signal',     # High volume with small price move
-
-        # Order Flow Proxies (6 features)
-        'buying_pressure',       # Up volume / Total volume
-        'selling_pressure',      # Down volume / Total volume
-        'delta_volume',          # Net volume (buy - sell)
-        'cumulative_delta',      # Cumulative delta over 5 days
-        'volume_at_price_high',  # Volume when price = session high
-        'volume_at_price_low',   # Volume when price = session low
-    ]
-
-    def __init__(self, config=None, use_gen7_features=True, use_hour0_features='auto', use_gen9_features=False):
+    def __init__(self, config=None):
         """
-        Initialize feature engineer.
+        Initialize feature engineer with universal feature set.
 
         Args:
             config: MLConfig object (optional)
-            use_gen7_features: If True, use GEN7 feature set with Session-1 features (default True)
-            use_hour0_features: 'auto' (detect from DB), True, or False (default 'auto')
-            use_gen9_features: If True, use GEN9 with S/D zones + microstructure (default False)
         """
         if config:
             self.feature_lags = config.feature_lags
-            self.target_horizon = getattr(config, 'target_horizon', 5)  # Default 5 for day trading
+            self.target_horizon = getattr(config, 'target_horizon', 5)
         else:
             self.feature_lags = [1, 2, 3, 5, 10, 20]
-            self.target_horizon = 5  # 5-day forward prediction for day trading
+            self.target_horizon = 5
 
-        # Initialize sub-modules for internal indicator calculation
+        # Initialize technical indicators calculator
         self.technical = TechnicalIndicators()
 
-        # Auto-detect Hour-0 features if set to 'auto'
-        if use_hour0_features == 'auto':
-            use_hour0_features = self._check_hour0_available()
-
-        # Initialize S/D detector for GEN9
-        self.use_gen9 = use_gen9_features
-        if use_gen9_features:
-            from signals.supply_demand import SupplyDemandDetector
-            self.sd_detector = SupplyDemandDetector()
-
-        # Select feature set
-        if use_gen9_features:
-            self.feature_set = self.GEN9_FEATURES
-            self.use_hour0 = use_hour0_features
-        elif use_hour0_features:
-            self.feature_set = self.GEN8_FEATURES
-            self.use_hour0 = True
-        elif use_gen7_features:
-            self.feature_set = self.GEN7_FEATURES
-            self.use_hour0 = False
-        else:
-            self.feature_set = self.LEGACY_46_FEATURES
-            self.use_hour0 = False
-
-    # Class-level cache for Hour-0 availability check
-    _hour0_cache = None
-
-    def _check_hour0_available(self) -> bool:
-        """Check if Hour-0 metrics table exists in database (cached)."""
-        # Use cached result if available
-        if FeatureEngineer._hour0_cache is not None:
-            return FeatureEngineer._hour0_cache
-
-        try:
-            from data.storage import DataStorage
-            from config import config
-            import sqlite3
-
-            storage = DataStorage(config.data.db_path)
-            with sqlite3.connect(storage.db_path) as conn:
-                table_check = conn.execute(
-                    "SELECT name FROM sqlite_master WHERE type='table' AND name='hour0_metrics'"
-                ).fetchone()
-                result = table_check is not None
-                # Cache the result
-                FeatureEngineer._hour0_cache = result
-                return result
-        except Exception:
-            FeatureEngineer._hour0_cache = False
-            return False
+        # Set universal feature set (no versioning)
+        self.feature_set = self.UNIVERSAL_FEATURES
     
     def create_features(
         self, 
@@ -190,19 +111,9 @@ class FeatureEngineer:
         # 4. Calendar features (Day of week, Month start/end)
         df = self._add_calendar_features(df)
 
-        # 5. Hour-0 features (if enabled and data available)
-        if self.use_hour0:
-            df = self._add_hour0_features(df)
-
-        # 6. GEN9 Advanced Features (S/D zones + Microstructure + Order Flow)
-        if self.use_gen9:
-            df = self._add_supply_demand_features(df)
-            df = self._add_microstructure_features(df)
-            df = self._add_order_flow_features(df)
-
-        # 7. Drop rows with NaN
+        # 5. Drop rows with NaN
         df = df.dropna()
-        
+
         # 6. Ensure EXACT feature list and order
         X = df[self.feature_set]
         y = df['target_direction']
@@ -232,7 +143,17 @@ class FeatureEngineer:
         # Volume
         df['volume_sma'] = df['volume'].rolling(window=20).mean()
         df['rel_volume'] = df['volume'] / df['volume_sma'].replace(0, 1)
-        
+
+        # Advanced volume indicators (2024 research)
+        df = self.technical.add_mfi(df)
+        df = self.technical.add_chaikin_money_flow(df)
+        df = self.technical.add_accumulation_distribution(df)
+        df = self.technical.add_obv(df)
+
+        # Derived volume features
+        df['obv_trend'] = df['obv'].pct_change(10, fill_method=None)  # 10-day OBV momentum
+        df['volume_price_trend'] = df['close'].pct_change(10, fill_method=None) * df['obv_trend']  # Price-volume alignment
+
         # Legacy Volatility (std of log returns * sqrt(252))
         if 'log_return' not in df.columns:
             # Use small epsilon to avoid log(0) errors
@@ -240,7 +161,7 @@ class FeatureEngineer:
             df['log_return'] = np.log(ratio.abs())
 
         df['volatility'] = df['log_return'].rolling(20).std() * np.sqrt(252)
-        
+
         return df
 
     def _add_price_features(self, df: pd.DataFrame) -> pd.DataFrame:
@@ -248,7 +169,7 @@ class FeatureEngineer:
         # Returns at various horizons
         for lag in self.feature_lags:
             if f'return_{lag}d' not in df.columns:
-                df[f'return_{lag}d'] = df['close'].pct_change(lag)
+                df[f'return_{lag}d'] = df['close'].pct_change(lag, fill_method=None)
         
         # Ensure log_return exists
         if 'log_return' not in df.columns:
@@ -278,7 +199,7 @@ class FeatureEngineer:
         df['close_position'] = (df['close'] - df['low']) / (df['high'] - df['low']).replace(0, 1)
         
         # Volume features
-        df['volume_change'] = df['volume'].pct_change()
+        df['volume_change'] = df['volume'].pct_change(fill_method=None)
         df['volume_ma20'] = df['volume'].rolling(20).mean()
         df['relative_volume'] = df['volume'] / df['volume_ma20'].replace(0, 1)
         
@@ -452,41 +373,8 @@ class FeatureEngineer:
 
         return df
 
-    def _add_supply_demand_features(self, df: pd.DataFrame) -> pd.DataFrame:
-        """
-        Add supply/demand zone features using the SupplyDemandDetector.
-
-        Args:
-            df: DataFrame with OHLCV data
-
-        Returns:
-            DataFrame with S/D features added
-        """
-        if not hasattr(self, 'sd_detector'):
-            # Fallback: fill with zeros if detector not initialized
-            for feat in ['sd_score', 'sd_demand_distance', 'sd_demand_strength',
-                        'sd_supply_distance', 'sd_supply_strength', 'sd_demand_fresh',
-                        'sd_supply_fresh', 'sd_zone_count', 'sd_net_strength']:
-                df[feat] = 0.0
-            return df
-
-        try:
-            # Get S/D features for current data
-            sd_features = self.sd_detector.get_zone_features(df)
-
-            # Add features to dataframe
-            for key, value in sd_features.items():
-                df[key] = value
-
-        except Exception as e:
-            logger.warning(f"Failed to add S/D features: {e}")
-            # Fill with zeros on error
-            for feat in ['sd_score', 'sd_demand_distance', 'sd_demand_strength',
-                        'sd_supply_distance', 'sd_supply_strength', 'sd_demand_fresh',
-                        'sd_supply_fresh', 'sd_zone_count', 'sd_net_strength']:
-                df[feat] = 0.0
-
-        return df
+    # Legacy GEN 9 methods below - NOT USED in current universal feature set
+    # Kept for reference but not called in create_features()
 
     def _add_microstructure_features(self, df: pd.DataFrame) -> pd.DataFrame:
         """
@@ -621,14 +509,6 @@ class FeatureEngineer:
         df = self._add_price_features(df)
         df = self._add_lagged_features(df)
         df = self._add_calendar_features(df)
-
-        if self.use_hour0:
-            df = self._add_hour0_features(df)
-
-        if self.use_gen9:
-            df = self._add_supply_demand_features(df)
-            df = self._add_microstructure_features(df)
-            df = self._add_order_flow_features(df)
 
         X = df[self.feature_set].fillna(0)
 

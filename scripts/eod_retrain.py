@@ -53,15 +53,9 @@ class EODRetraining:
         self.fetcher = DataFetcher(config.data.stock_universe)
         self.signal_combiner = SignalCombiner(config)
 
-        # Load champion metadata (includes optimal SL/TP from training)
-        metadata_path = os.path.join('models', 'champion_metadata.json')
-        with open(metadata_path, 'r') as f:
-            self.champion_metadata = json.load(f)
-
-        # Gen 5.1: Load optimal SL/TP configuration from champion
-        xgb_meta = self.champion_metadata.get('xgboost', {})
-        self.sl_atr_mult = xgb_meta.get('sl_atr_mult', 2.0)  # Default to 2.0 if not found
-        self.tp_atr_mult = xgb_meta.get('tp_atr_mult', 3.0)  # Default to 3.0 if not found
+        # Use fixed SL/TP from config (no longer loaded from metadata)
+        self.sl_atr_mult = config.exit.stop_loss_atr_mult
+        self.tp_atr_mult = config.exit.take_profit_atr_mult
 
         self.position_manager = PositionManager()
     
@@ -254,14 +248,14 @@ class EODRetraining:
             
             acc_challenger = metrics.get('cv_accuracy', 0)
             
-            if acc_challenger > 0.60: 
+            if acc_challenger > 0.60:
                 console.print(f"  [green]✓ XGBOOST passed validation ({acc_challenger:.1%})[/green]")
                 challenger.save(os.path.join('models', 'global_xgb_champion.pkl'))
                 self.metrics_summary['xgboost'] = {'status': 'UPDATED', 'accuracy': acc_challenger}
             else:
-                current_best = self.champion_metadata['xgboost']['win_rate']
                 console.print(f"  [red]✕ XGBOOST failed validation ({acc_challenger:.1%})[/red]")
-                self.metrics_summary['xgboost'] = {'status': 'KEPT_OLD', 'accuracy': current_best}
+                console.print(f"  [dim]Model not updated - accuracy below 60% threshold[/dim]")
+                self.metrics_summary['xgboost'] = {'status': 'KEPT_OLD', 'accuracy': acc_challenger}
             
             progress.stop()
 

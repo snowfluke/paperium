@@ -18,7 +18,7 @@ class Screener:
     
     def __init__(self, config=None, enable_liquidity_tiers=True):
         self.min_price = 50  # No penny stocks below 50
-        self.min_volume = 1_000_000  # Minimum liquidity
+        self.min_volume = 500_000  # Minimum liquidity
         self.enable_liquidity_tiers = enable_liquidity_tiers
 
         # Liquidity Tiers (IDX stocks)

@@ -33,6 +33,7 @@ from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TaskPr
 from config import config
 from data.fetcher import DataFetcher, get_sector_mapping
 from data.storage import DataStorage
+from data.blacklist import BLACKLIST_UNIVERSE
 from signals.combiner import SignalCombiner
 from signals.screener import Screener
 from ml.model import TradingModel
@@ -55,13 +56,15 @@ def log(msg: str):
     console.print(f"[dim][{mins:02d}:{secs:02d}][/dim] {msg}")
 
 
-# Thresholds aligned with train/eval (threshold 0.40 = 70% win probability)
-# ML scores are on [-1, 1] scale where (prob - 0.5) * 2
-# prob 0.70 → ML score 0.40 (training baseline)
-# prob 0.80 → ML score 0.60 (high conviction)
-ML_SCORE_THRESHOLD = 0.40      # Minimum ML score (matches train/eval at 0.40)
-MARKET_ORDER_THRESHOLD = 0.60  # ML score for immediate MARKET orders (80% prob)
-LIMIT_ORDER_THRESHOLD = 0.40   # ML score for LIMIT orders (70% prob)
+# Thresholds from config.py (dynamic based on strategy)
+# ML scores are probability values [0, 1] from XGBoost
+# Use config.exit.signal_threshold as baseline for entry
+# Market orders require +0.30 above threshold for high conviction
+from config import config
+
+ML_SCORE_THRESHOLD = config.exit.signal_threshold       # Minimum ML score (from config)
+MARKET_ORDER_THRESHOLD = config.exit.signal_threshold + 0.30  # High conviction threshold
+LIMIT_ORDER_THRESHOLD = config.exit.signal_threshold    # Same as ML threshold
 
 
 class MorningSignals:
@@ -81,22 +84,19 @@ class MorningSignals:
         else:
             logger.warning("No champion model found! Using indicators only.")
 
-        # Gen 5.1: Load optimal SL/TP from champion metadata
+        # Load metadata for display purposes only (not for SL/TP)
         self.metadata = self._load_metadata()
 
-        # Override config with optimal SL/TP from training
-        exit_config = config.exit
-        if 'sl_atr_mult' in self.metadata and 'tp_atr_mult' in self.metadata:
-            exit_config.stop_loss_atr_mult = self.metadata['sl_atr_mult']
-            exit_config.take_profit_atr_mult = self.metadata['tp_atr_mult']
-            logger.info(f"Using optimized SL/TP: {exit_config.stop_loss_atr_mult:.2f}x / {exit_config.take_profit_atr_mult:.2f}x ATR")
-        else:
-            logger.warning("No SL/TP config in metadata, using defaults from config.py")
+        # Use fixed SL/TP from config (no longer loaded from metadata)
+        logger.info(f"Using fixed SL/TP: {config.exit.stop_loss_atr_mult:.2f}x / {config.exit.take_profit_atr_mult:.2f}x ATR")
 
-        self.exit_manager = ExitManager(exit_config)
+        self.exit_manager = ExitManager(config.exit)
         self.position_sizer = PositionSizer(config.portfolio)
         self.position_manager = PositionManager()
         self.sector_mapping = get_sector_mapping()
+
+        # Blacklist protection (use set for O(1) lookup)
+        self.blacklist = set(BLACKLIST_UNIVERSE)
 
     def _load_metadata(self) -> Dict:
         """Load model metadata from JSON."""
@@ -132,8 +132,8 @@ class MorningSignals:
             f"[bold white]IHSG MORNING SIGNALS[/bold white]\n"
             f"[dim]Quantitative Trading Dashboard • {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}[/dim]\n"
             f"[dim]Model Win Rate: [bold green]{win_rate:.1%}[/bold green] | Trained: [dim]{trained_date}[/dim]\n"
-            f"[dim]ML Threshold: [cyan]{ML_SCORE_THRESHOLD:.2f}[/cyan] (≥70% prob) | "
-            f"Market Order: [cyan]{MARKET_ORDER_THRESHOLD:.2f}[/cyan] (≥80% prob)[/dim]",
+            f"[dim]ML Threshold: [cyan]{ML_SCORE_THRESHOLD:.2f}[/cyan] (entry) | "
+            f"Market Order: [cyan]{MARKET_ORDER_THRESHOLD:.2f}[/cyan] (high conviction)[/dim]",
             border_style="cyan",
             padding=(0, 2),
             box=box.DOUBLE
@@ -206,49 +206,67 @@ class MorningSignals:
         
         # Get latest prices
         all_data = self.storage.get_prices()
-        
+
         for pos in positions:
             ticker = pos.ticker
+
+            # Check if position is blacklisted
+            if ticker in self.blacklist:
+                log(f"  [red]WARNING: {ticker} is BLACKLISTED - immediate exit recommended![/red]")
+                recommendations[ticker] = {
+                    'position': pos,
+                    'current_price': 0,  # Will be updated below if data available
+                    'pnl_pct': 0,
+                    'action': "SELL IMMEDIATELY (BLACKLISTED)",
+                    'reason': "Stock is on blacklist - exit ASAP"
+                }
+                # Continue to get current price if available
+
             ticker_data = all_data[all_data['ticker'] == ticker]
-            
+
             if ticker_data.empty:
                 continue
-            
+
             latest = ticker_data.iloc[-1]
             current_price = latest['close']
             high = latest['high']
             low = latest['low']
-            
+
             entry = pos.filled_price or pos.entry_price
             pnl_pct = (current_price - entry) / entry * 100
-            
-            # Determine recommendation
-            action = "HOLD"
-            reason = ""
-            
-            if current_price <= pos.stop_loss:
-                action = "SELL (Stop Loss Hit)"
-                reason = f"Price {current_price:,.0f} <= SL {pos.stop_loss:,.0f}"
-            elif current_price >= pos.take_profit:
-                action = "SELL (Take Profit Hit)"
-                reason = f"Price {current_price:,.0f} >= TP {pos.take_profit:,.0f}"
-            elif pnl_pct < -5:
-                action = "REVIEW (Large Loss)"
-                reason = f"Floating loss: {pnl_pct:.1f}%"
-            elif pnl_pct > 8:
-                action = "CONSIDER TRAILING"
-                reason = f"Floating profit: {pnl_pct:.1f}%"
-            else:
+
+            # Determine recommendation (skip if already marked as blacklisted)
+            if ticker not in self.blacklist:
                 action = "HOLD"
-                reason = f"P&L: {pnl_pct:+.1f}%"
-            
-            recommendations[ticker] = {
-                'position': pos,
-                'current_price': current_price,
-                'pnl_pct': pnl_pct,
-                'action': action,
-                'reason': reason
-            }
+                reason = ""
+
+                if current_price <= pos.stop_loss:
+                    action = "SELL (Stop Loss Hit)"
+                    reason = f"Price {current_price:,.0f} <= SL {pos.stop_loss:,.0f}"
+                elif current_price >= pos.take_profit:
+                    action = "SELL (Take Profit Hit)"
+                    reason = f"Price {current_price:,.0f} >= TP {pos.take_profit:,.0f}"
+                elif pnl_pct < -5:
+                    action = "REVIEW (Large Loss)"
+                    reason = f"Floating loss: {pnl_pct:.1f}%"
+                elif pnl_pct > 8:
+                    action = "CONSIDER TRAILING"
+                    reason = f"Floating profit: {pnl_pct:.1f}%"
+                else:
+                    action = "HOLD"
+                    reason = f"P&L: {pnl_pct:+.1f}%"
+
+                recommendations[ticker] = {
+                    'position': pos,
+                    'current_price': current_price,
+                    'pnl_pct': pnl_pct,
+                    'action': action,
+                    'reason': reason
+                }
+            else:
+                # Update price info for blacklisted stock
+                recommendations[ticker]['current_price'] = current_price
+                recommendations[ticker]['pnl_pct'] = pnl_pct
         
         return recommendations
     
@@ -268,8 +286,18 @@ class MorningSignals:
         # Calculate signals and ML predictions with progress bar
         data_by_ticker = {}
         ml_predictions = {}
-        unique_tickers = all_data['ticker'].unique()
+        all_tickers = all_data['ticker'].unique()
 
+        # Filter out blacklisted stocks FIRST
+        unique_tickers = [ticker for ticker in all_tickers if ticker not in self.blacklist]
+        blacklisted_count = len(all_tickers) - len(unique_tickers)
+
+        if blacklisted_count > 0:
+            log(f"  [yellow]Filtered out {blacklisted_count} blacklisted stocks[/yellow]")
+
+        if not unique_tickers:
+            log("  [red]No tickers remaining after blacklist filter[/red]")
+            return []
 
         # Hourly Caching Logic
         cache_dir = Path(".cache")
@@ -382,7 +410,7 @@ class MorningSignals:
                 rankings = self.signal_combiner.rank_stocks(data_by_ticker, ml_predictions)
                 if not rankings.empty:
                     # STRICT FILTERING: Must be a BUY signal AND meet ML score threshold
-                    # This aligns with train/eval which uses pure ML score >= 0.40
+                    # This aligns with train/eval which uses config.exit.signal_threshold
                     buy_signals = rankings[
                         (rankings['signal'] == 'BUY') & (rankings['ml_score'] >= ML_SCORE_THRESHOLD)
                     ].copy()
@@ -423,8 +451,8 @@ class MorningSignals:
             sector = self.sector_mapping.get(ticker, 'Other')
 
             # Determine order type based on ML signal strength (aligned with train/eval)
-            # ML score 0.60 = 80% win probability → MARKET order (immediate)
-            # ML score 0.40-0.59 = 70-80% win probability → LIMIT order (wait for entry)
+            # High conviction (threshold + 0.30) → MARKET order (immediate)
+            # Normal conviction (threshold) → LIMIT order (wait for entry)
             ml_score = row.get('ml_score', 0.0)
             if ml_score >= MARKET_ORDER_THRESHOLD:
                 order_type = OrderType.MARKET.value

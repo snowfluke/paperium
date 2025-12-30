@@ -18,7 +18,7 @@ class DataConfig:
     
     # Historical data settings
     lookback_days: int = 365 * 5  # 5 years of history
-    min_data_points: int = 100  # Minimum data points for calculation
+    min_data_points: int = 252  # Minimum data points for calculation
 
 
 @dataclass
@@ -44,41 +44,49 @@ class SignalConfig:
 @dataclass
 class MLConfig:
     """Machine learning model configuration"""
-    # Training
-    training_window: int = 252  # Rolling window size (1 year)
-    validation_split: float = 0.2
-    
+    # Training windows (5 years total - using more of your 5-year historical data)
+    training_window: int = 1008  # 4 years of trading days for training
+    validation_window: int = 252  # 1 year of trading days for validation
+    validation_split: float = 0.2  # Deprecated, use validation_window instead
+
     # Prediction target (aligned with max_holding_days for day trading)
     target_horizon: int = 5  # Predict 5-day forward return (matches max hold)
-    
-    # XGBoost parameters (Conservative Defaults)
-    n_estimators: int = 100
-    max_depth: int = 5
 
-    learning_rate: float = 0.1
+    # XGBoost parameters (Conservative Defaults with Strong Regularization)
+    # Note: Based on training results, 50 trees is the sweet spot before overfitting
+    # Regularization allows using more trees without overfitting
+    n_estimators: int = 500
+    max_depth: int = 4
+    learning_rate: float = 0.02
+    min_child_weight: int = 5
 
-    min_child_weight: int = 3
+    # Regularization parameters (prevent overfitting)
+    subsample: float = 0.7  # Use 70% of data per tree (randomness prevents overfitting)
+    colsample_bytree: float = 0.7  # Use 70% of features per tree
+    gamma: float = 0.2  # Minimum loss reduction required to split (conservative)
+    reg_alpha: float = 1.0       # Stronger L1 regularization (feature selection)
+    reg_lambda: float = 2.0      # Stronger L2 regularization
+
     use_gpu: bool = False
-    
-    # Feature settings
-    feature_lags: List[int] = field(default_factory=lambda: [1, 2, 3, 5, 10, 20])
 
+    # Feature settings
+    feature_lags: List[int] = field(default_factory=lambda: [1, 2, 3, 5, 10, 15, 20])
 
 @dataclass
 class ExitConfig:
     """Exit strategy configuration"""
-    # ATR-based stops
-    stop_loss_atr_mult: float = 2.0
-    take_profit_atr_mult: float = 3.0
-    trailing_stop_atr_mult: float = 1.5
-    
-    # Time-based exit
-    max_holding_days: int = 5
-    
-    # Fixed stops (fallback)
-    max_loss_pct: float = 0.08  # 8% max loss
-    min_profit_pct: float = 0.02  # Minimum 2% to consider partial exit
+    stop_loss_atr_mult: float = 2.0       # Tighter stop (2.0x is standard for swing)
+    take_profit_atr_mult: float = 5.0     # Reduced from 10.0. (4-6x is a "Home Run" in 5 days)
+    trailing_stop_atr_mult: float = 2.5   # Trail loosely to let winners run
 
+    # Time-based exit (hold longer for bigger moves)
+    max_holding_days: int = 5
+
+    # Fixed stops (fallback for extreme cases)
+    max_loss_pct: float = 0.08    # Tighten max loss to 8% (preservation is key)
+    min_profit_pct: float = 0.15  # Realistic 15% upside target for 1 week
+ 
+    signal_threshold: float = 0.55  # Minimum ML signal to enter/hold position
 
 @dataclass
 class PortfolioConfig:
@@ -87,17 +95,17 @@ class PortfolioConfig:
     total_value: float = 100_000_000  # Default 100M IDR
     
     # Position sizing
-    max_positions: int = 10
-    base_position_pct: float = 0.10  # 10% per position
-    max_sector_exposure: float = 0.30  # 30% max per sector
+    max_positions: int = 8             # Reduced: Focus capital on best ideas
+    base_position_pct: float = 0.125   # 12.5% per trade
+    max_sector_exposure: float = 0.25  # 25% max per sector
     
     # Liquidity filter
-    min_avg_volume: int = 1_000_000  # 1M shares minimum
-    min_market_cap: float = 1e12  # 1 Trillion IDR minimum
+    min_avg_volume: int = 2_000_000  # 2M shares minimum
+    min_market_cap: float = 2e12  # 2 Trillion IDR minimum
     
     # Risk management
-    max_portfolio_volatility: float = 0.25  # 25% annual vol target
-    max_correlation: float = 0.7  # Avoid highly correlated positions
+    max_portfolio_volatility: float = 0.20  # 20% annual vol target
+    max_correlation: float = 0.6  # Avoid highly correlated positions
 
 
 @dataclass

@@ -65,7 +65,10 @@ class TechnicalIndicators:
         # Volume indicators
         df = self.add_volume_sma(df)
         df = self.add_obv(df)
-        
+        df = self.add_mfi(df)
+        df = self.add_chaikin_money_flow(df)
+        df = self.add_accumulation_distribution(df)
+
         return df
     
     def add_rsi(self, df: pd.DataFrame, period: Optional[int] = None) -> pd.DataFrame:
@@ -239,9 +242,106 @@ class TechnicalIndicators:
         
         df['obv'] = obv
         df['obv_sma'] = df['obv'].rolling(window=20).mean()
-        
+
         return df
-    
+
+    def add_mfi(self, df: pd.DataFrame, period: int = 14) -> pd.DataFrame:
+        """
+        Calculate Money Flow Index (MFI).
+
+        MFI is like RSI but incorporates volume. Ranges from 0-100.
+        MFI > 80 = overbought, MFI < 20 = oversold
+
+        Formula:
+        1. Typical Price = (High + Low + Close) / 3
+        2. Money Flow = Typical Price × Volume
+        3. Positive/Negative Money Flow based on price direction
+        4. Money Flow Ratio = 14-period Positive MF / 14-period Negative MF
+        5. MFI = 100 - (100 / (1 + Money Flow Ratio))
+        """
+        typical_price = (df['high'] + df['low'] + df['close']) / 3
+        money_flow = typical_price * df['volume']
+
+        # Determine positive vs negative money flow
+        positive_flow = money_flow.where(typical_price > typical_price.shift(1), 0)
+        negative_flow = money_flow.where(typical_price < typical_price.shift(1), 0)
+
+        # Calculate rolling sums
+        positive_mf = positive_flow.rolling(window=period).sum()
+        negative_mf = negative_flow.rolling(window=period).sum()
+
+        # Money Flow Ratio and MFI
+        mf_ratio = positive_mf / negative_mf.replace(0, np.inf)
+        df['mfi'] = 100 - (100 / (1 + mf_ratio))
+
+        # MFI signals
+        df['mfi_oversold'] = (df['mfi'] < 20).astype(int)
+        df['mfi_overbought'] = (df['mfi'] > 80).astype(int)
+
+        return df
+
+    def add_chaikin_money_flow(self, df: pd.DataFrame, period: int = 20) -> pd.DataFrame:
+        """
+        Calculate Chaikin Money Flow (CMF).
+
+        CMF measures buying/selling pressure over a period.
+        Positive = accumulation, Negative = distribution
+
+        Formula:
+        1. Money Flow Multiplier = ((Close - Low) - (High - Close)) / (High - Low)
+        2. Money Flow Volume = Multiplier × Volume
+        3. CMF = Sum(Money Flow Volume, period) / Sum(Volume, period)
+
+        CMF > 0 = buying pressure, CMF < 0 = selling pressure
+        """
+        # Money Flow Multiplier
+        clv = ((df['close'] - df['low']) - (df['high'] - df['close'])) / (df['high'] - df['low'])
+        clv = clv.fillna(0)  # Handle division by zero when high == low
+
+        # Money Flow Volume
+        mf_volume = clv * df['volume']
+
+        # CMF
+        df['cmf'] = (
+            mf_volume.rolling(window=period).sum() /
+            df['volume'].rolling(window=period).sum()
+        )
+
+        # CMF signals
+        df['cmf_bullish'] = (df['cmf'] > 0.05).astype(int)  # Strong accumulation
+        df['cmf_bearish'] = (df['cmf'] < -0.05).astype(int)  # Strong distribution
+
+        return df
+
+    def add_accumulation_distribution(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Calculate Accumulation/Distribution Line (ADL).
+
+        ADL is a cumulative indicator that uses volume and price to assess
+        whether a stock is being accumulated or distributed.
+
+        Formula:
+        1. Money Flow Multiplier = ((Close - Low) - (High - Close)) / (High - Low)
+        2. Money Flow Volume = Multiplier × Volume
+        3. ADL = Previous ADL + Money Flow Volume
+
+        Rising ADL = accumulation, Falling ADL = distribution
+        """
+        # Money Flow Multiplier (same as CMF)
+        clv = ((df['close'] - df['low']) - (df['high'] - df['close'])) / (df['high'] - df['low'])
+        clv = clv.fillna(0)
+
+        # Money Flow Volume
+        mf_volume = clv * df['volume']
+
+        # Cumulative ADL
+        df['adl'] = mf_volume.cumsum()
+
+        # ADL trend (20-period rate of change)
+        df['adl_roc'] = df['adl'].pct_change(20, fill_method=None)
+
+        return df
+
     def get_indicator_score(self, row: pd.Series) -> float:
         """
         Calculate a composite technical score from indicators.

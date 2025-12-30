@@ -39,6 +39,7 @@ from data.fetcher import get_sector_mapping
 from ml.model import TradingModel
 from signals.screener import Screener
 from signals.regime_detector import RegimeDetector, MarketRegime
+from strategy.position_sizer import PositionSizer
 
 logging.basicConfig(level=logging.WARNING)
 console = Console()
@@ -61,19 +62,17 @@ class MLBacktest:
     """
     
     def __init__(self, model_type: str = 'xgboost', retrain: bool = False, custom_model_path: Optional[str] = None,
-                 sl_atr_mult: float = 2.0, tp_atr_mult: float = 3.0, signal_threshold: float = 0.70,
-                 use_gen7_features: bool = True, use_gen9_features: bool = False):
+                 sl_atr_mult: Optional[float] = None, tp_atr_mult: Optional[float] = None,
+                 signal_threshold: Optional[float] = None):
         """
         Args:
             model_type: 'xgboost'
             retrain: If True, will train models before backtesting.
                      If False, will load existing champion models or reject.
             custom_model_path: Optional custom path to model file (for parallel execution)
-            sl_atr_mult: Stop loss ATR multiplier (dynamic per iteration)
-            tp_atr_mult: Take profit ATR multiplier (dynamic per iteration)
-            signal_threshold: Minimum ML score to trigger a trade (default 0.70 for high conviction)
-            use_gen7_features: If True, use GEN7 feature set with Session-1 features (default True)
-            use_gen9_features: If True, use GEN9 feature set with S/D + microstructure (default False)
+            sl_atr_mult: Stop loss ATR multiplier (default: from config.exit)
+            tp_atr_mult: Take profit ATR multiplier (default: from config.exit)
+            signal_threshold: Minimum ML score to trigger a trade (default: from config.exit)
         """
         self.storage = DataStorage(config.data.db_path)
         self.sector_mapping = get_sector_mapping()
@@ -81,12 +80,10 @@ class MLBacktest:
         self.retrain = retrain
         self.custom_model_path = custom_model_path
         self.screener = Screener(config)
-        self.use_gen7_features = use_gen7_features
-        self.use_gen9_features = use_gen9_features
 
-        # Create shared FeatureEngineer to avoid repeated DB queries during pooling
+        # Create shared FeatureEngineer (universal feature set)
         from ml.features import FeatureEngineer
-        self.shared_feature_engineer = FeatureEngineer(config.ml, use_gen7_features=use_gen7_features, use_hour0_features='auto', use_gen9_features=use_gen9_features)
+        self.shared_feature_engineer = FeatureEngineer(config.ml)
 
         # Trading parameters
         self.initial_capital = 100_000_000
@@ -94,13 +91,13 @@ class MLBacktest:
         self.buy_fee = 0.0015
         self.sell_fee = 0.0025
 
-        # Dynamic SL/TP (ATR-based, tunable per iteration)
-        self.sl_atr_mult = sl_atr_mult  # Gen 5.1: Dynamic stop loss
-        self.tp_atr_mult = tp_atr_mult  # Gen 5.1: Dynamic take profit
-        self.max_hold_days = 5
-        
-        # Configurable signal threshold for trading
-        self.signal_threshold = signal_threshold
+        # SL/TP (ATR-based) - use config values if not specified
+        self.sl_atr_mult = sl_atr_mult if sl_atr_mult is not None else config.exit.stop_loss_atr_mult
+        self.tp_atr_mult = tp_atr_mult if tp_atr_mult is not None else config.exit.take_profit_atr_mult
+        self.max_hold_days = config.exit.max_holding_days
+
+        # Signal threshold - use config value if not specified
+        self.signal_threshold = signal_threshold if signal_threshold is not None else config.exit.signal_threshold
 
         # Model (Global XGBoost)
         self.global_xgb = None
@@ -108,9 +105,12 @@ class MLBacktest:
         # Cache for pooled training data (avoids re-pooling on each iteration)
         self.pooled_train_data: Optional[Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]] = None
 
-        # Market regime detector for crash filtering (Gen 7)
-        self.regime_detector = RegimeDetector() if use_gen7_features else None
+        # Market regime detector for crash filtering
+        self.regime_detector = RegimeDetector()
         self.ihsg_data: Optional[pd.DataFrame] = None
+
+        # Position sizing (signal-strength-based)
+        self.position_sizer = PositionSizer(config.portfolio)
     
     def run(self, start_date: str, end_date: str, train_window: int = 252, pre_loaded_data: Optional[pd.DataFrame] = None):
         """
@@ -216,7 +216,7 @@ class MLBacktest:
             
             if os.path.exists(xgb_path):
                 try:
-                    self.global_xgb = TradingModel(config.ml, use_gen7_features=self.use_gen7_features)
+                    self.global_xgb = TradingModel(config.ml)
                     self.global_xgb.load(xgb_path)
                     console.print(f"  ✓ Loaded Global XGBoost model from {xgb_path}")
                 except Exception as e:
@@ -334,7 +334,7 @@ class MLBacktest:
         if self.model_type == 'xgboost':
             try:
                 model_create_start = time.time()
-                self.global_xgb = TradingModel(config.ml, use_gen7_features=self.use_gen7_features)
+                self.global_xgb = TradingModel(config.ml)
 
                 self.global_xgb.feature_names = X_combined.columns.tolist()
 
@@ -498,8 +498,9 @@ class MLBacktest:
         log("[dim]Pre-grouping data by date for optimization...[/dim]")
         date_grouped_data = {date: group for date, group in all_data_feat.groupby('date')}
 
-        # Load IHSG data for crash detection (Gen 7)
+        # Load IHSG data for crash detection (Gen 7) - pre-compute crash days ONCE
         ihsg_series = None
+        crash_days_set = set()  # Cache crash days (computed once per backtest)
         if self.regime_detector:
             try:
                 # Calculate start date for 5 years of data
@@ -509,7 +510,14 @@ class MLBacktest:
                 if not ihsg_df.empty:
                     ihsg_df['date'] = pd.to_datetime(ihsg_df['date'])
                     ihsg_series = ihsg_df.set_index('date')['close'].sort_index()
-                    log(f"[green]✓ IHSG crash filter enabled ({len(ihsg_series)} days)[/green]")
+
+                    # Pre-compute crash days for all dates in backtest (ONCE)
+                    log(f"[dim]  Pre-computing crash days for {len(all_dates)} dates...[/dim]")
+                    for date in all_dates:
+                        if self.regime_detector.detect_ihsg_crash(ihsg_series, date):
+                            crash_days_set.add(date)
+
+                    log(f"[green]✓ IHSG crash filter enabled: {len(crash_days_set)}/{len(all_dates)} crash days ({len(crash_days_set)/len(all_dates)*100:.1f}%)[/green]")
                 else:
                     log("[yellow]⚠ IHSG data not found, crash filter disabled[/yellow]")
             except Exception as e:
@@ -590,15 +598,13 @@ class MLBacktest:
                 
                 # Open new positions
                 if len(positions) < self.max_positions:
-                    # Gen 7: Check IHSG crash filter first
-                    if self.regime_detector and ihsg_series is not None:
-                        is_crash = self.regime_detector.detect_ihsg_crash(ihsg_series, date)
-                        if is_crash:
-                            # Skip opening new positions during market crash
-                            crash_days_count += 1
-                            progress.update(task, advance=1)
-                            equity_curve.append({'date': date, 'equity': cash + sum(p['shares'] * p['entry_price'] for p in positions.values())})
-                            continue
+                    # Gen 7: Check IHSG crash filter (using pre-computed cache)
+                    if date in crash_days_set:
+                        # Skip opening new positions during market crash
+                        crash_days_count += 1
+                        progress.update(task, advance=1)
+                        equity_curve.append({'date': date, 'equity': cash + sum(p['shares'] * p['entry_price'] for p in positions.values())})
+                        continue
                     candidates = []
 
                     for ticker in day_data['ticker'].unique():
@@ -660,13 +666,31 @@ class MLBacktest:
                             
                         entry_price = cand['close']
                         atr = cand['atr'] if pd.notna(cand['atr']) else entry_price * 0.02
-                        
-                        position_value = min(cash * 0.12, self.initial_capital * 0.1)
-                        shares = int(position_value / entry_price)
-                        
+
+                        # === DYNAMIC POSITION SIZING (Signal-Strength-Based) ===
+                        # Use ATR-based volatility targeting with confidence multiplier
+                        current_portfolio_value = cash + sum(p['shares'] * p['entry_price'] for p in positions.values())
+                        stop_loss_price = entry_price - (atr * self.sl_atr_mult)
+
+                        size_info = self.position_sizer.calculate_position_size(
+                            portfolio_value=current_portfolio_value,
+                            stock_volatility=0.25,  # Assume 25% annual vol (could calculate from historical data)
+                            avg_market_volatility=0.20,
+                            entry_price=entry_price,
+                            stop_loss=stop_loss_price,
+                            win_rate=0.75,  # Use historical or default
+                            avg_win_loss_ratio=2.5,
+                            confidence=cand['score'],  # ML signal strength (0.70-1.00)
+                            atr=atr,
+                            use_atr_targeting=True  # Use ATR-based sizing as primary method
+                        )
+
+                        shares = size_info['shares']
+                        position_value = size_info['position_value']
+
                         if shares <= 0:
                             continue
-                        
+
                         cost = shares * entry_price * (1 + self.buy_fee)
                         if cost > cash * 0.95:
                             continue
@@ -697,11 +721,6 @@ class MLBacktest:
                 progress.update(task, advance=1)
 
         log(f"  Max combined score seen during simulation: {max_seen_score:.4f}")
-
-        # Log crash protection stats
-        if self.regime_detector and crash_days_count > 0:
-            crash_pct = crash_days_count / len(all_dates) * 100
-            log(f"  [cyan]🛡 IHSG Crash Filter: Protected {crash_days_count}/{len(all_dates)} days ({crash_pct:.1f}%)[/cyan]")
 
         return self._calculate_metrics(trades, equity_curve)
     
@@ -840,13 +859,17 @@ def main():
     parser.add_argument('--window', type=int, default=252, help='Training window in trading days')
     parser.add_argument('--retrain', action='store_true', help='Force retraining of models before evaluation')
     parser.add_argument('--model-path', type=str, default=None, help='Custom path to model file (for parallel execution)')
-    parser.add_argument('--threshold', type=float, default=0.40,
-                       help='Minimum ML score for trade entry (default 0.40, matches training)')
+    parser.add_argument('--threshold', type=float, default=None,
+                       help='Minimum ML score for trade entry (default: use config.exit.signal_threshold)')
 
     args = parser.parse_args()
 
+    # Use config threshold if not specified
+    from config import config
+    threshold = args.threshold if args.threshold is not None else config.exit.signal_threshold
+
     bt = MLBacktest(model_type=args.model, retrain=args.retrain, custom_model_path=args.model_path,
-                   signal_threshold=args.threshold)
+                   signal_threshold=threshold)
     bt.run(args.start, args.end, train_window=args.window)
 
 

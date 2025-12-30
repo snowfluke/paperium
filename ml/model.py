@@ -28,14 +28,12 @@ class TradingModel:
     Implements daily self-refinement (EOD model update).
     """
     
-    def __init__(self, config=None, use_gen7_features=True, use_gen9_features=False):
+    def __init__(self, config=None):
         """
-        Initialize trading model.
+        Initialize trading model with universal feature set.
 
         Args:
             config: MLConfig object (optional)
-            use_gen7_features: If True, use GEN7 feature set with Session-1 features (default True)
-            use_gen9_features: If True, use GEN9 feature set with S/D + microstructure (default False)
         """
         if config:
             self.training_window = config.training_window
@@ -44,20 +42,28 @@ class TradingModel:
             self.max_depth = config.max_depth
             self.learning_rate = config.learning_rate
             self.min_child_weight = config.min_child_weight
+            self.subsample = getattr(config, 'subsample', 0.8)
+            self.colsample_bytree = getattr(config, 'colsample_bytree', 0.8)
+            self.gamma = getattr(config, 'gamma', 0.1)
+            self.reg_alpha = getattr(config, 'reg_alpha', 0.1)
+            self.reg_lambda = getattr(config, 'reg_lambda', 1.0)
             self.use_gpu = getattr(config, 'use_gpu', False)
         else:
-            self.training_window = 252
+            self.training_window = 504  # 2 years (updated to match new standard)
             self.min_training_samples = 40
-            self.n_estimators = 100  # Simple default
-            self.max_depth = 5       # Simple default
+            self.n_estimators = 50
+            self.max_depth = 5
             self.learning_rate = 0.1
             self.min_child_weight = 3
+            self.subsample = 0.8
+            self.colsample_bytree = 0.8
+            self.gamma = 0.1
+            self.reg_alpha = 0.1
+            self.reg_lambda = 1.0
             self.use_gpu = False
 
-        self.use_gen7_features = use_gen7_features
-        self.use_gen9_features = use_gen9_features
-        # Auto-detect Hour-0 features (GEN8) if available in database
-        self.feature_engineer = FeatureEngineer(config, use_gen7_features=use_gen7_features, use_hour0_features='auto', use_gen9_features=use_gen9_features)
+        # Universal feature engineer (no generation flags)
+        self.feature_engineer = FeatureEngineer(config)
         self.model = None
         self.feature_names = None
         self.last_trained = None
@@ -70,11 +76,11 @@ class TradingModel:
             'max_depth': self.max_depth,
             'learning_rate': self.learning_rate,
             'min_child_weight': self.min_child_weight,
-            'subsample': 0.8,
-            'colsample_bytree': 0.8,
-            # Gen 5.1: Light regularization to prevent overfitting (learned from Gen 1-4 disaster)
-            'reg_alpha': 0.01,   # L1 regularization (was 0 = overfit, was 0.1 = too harsh)
-            'gamma': 0.01,       # Minimum loss reduction for split (prevent noise fitting)
+            'subsample': self.subsample,
+            'colsample_bytree': self.colsample_bytree,
+            'gamma': self.gamma,
+            'reg_alpha': self.reg_alpha,
+            'reg_lambda': self.reg_lambda,
             'objective': 'binary:logistic',
             'eval_metric': 'logloss',
             'random_state': 42,

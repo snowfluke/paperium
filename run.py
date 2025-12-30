@@ -66,9 +66,9 @@ def setup_menu():
     
     console.print("\n[dim]Prepare your environment and sync market data[/dim]\n")
     console.print("1. [bold cyan]Clean Universe[/bold cyan] (Filter illiquid/suspended stocks)")
-    console.print("2. [bold magenta]Sync Stock Data[/bold magenta] (Fetch 5 years of daily history)")
+    console.print("2. [bold magenta]Sync Stock Data[/bold magenta] (Fetch historical data - training uses 3 years)")
     console.print("3. [bold green]Download IHSG Index[/bold green] (For crash detection)")
-    console.print("4. [bold yellow]Analyze Hour-0 Patterns[/bold yellow] (Fetch hourly & calculate metrics)")
+    console.print("4. [bold yellow]Analyze Hour-0 Patterns[/bold yellow] (Optional - not used by universal model)")
     console.print("5. [bold red]Clear Cache[/bold red] (Delete .cache folder)")
     console.print("B. Back to Main Menu")
 
@@ -157,28 +157,28 @@ def train_menu():
                 metadata = {}
         current_wr = metadata.get('xgboost', {}).get('win_rate', 0)
         current_wl = metadata.get('xgboost', {}).get('wl_ratio', 0)
-        current_score = metadata.get('xgboost', {}).get('combined_score', current_wr)
-        current_gen = metadata.get('xgboost', {}).get('generation', 'GEN 7')
-        console.print(f"[cyan]Current Champion ({current_gen}):[/cyan] WR={current_wr:.1%}, W/L={current_wl:.2f}x, Score={current_score:.1%}\n")
+        current_trades = metadata.get('xgboost', {}).get('total_trades', 0)
+        current_sharpe = metadata.get('xgboost', {}).get('sharpe_ratio', 0)
+        console.print(f"[cyan]Current Champion:[/cyan] WR={current_wr:.1%}, W/L={current_wl:.2f}x, Trades={current_trades}, Sharpe={current_sharpe:.2f}\n")
     except:
         pass
 
-    target = Prompt.ask("Target Combined Score (Win Rate + W/L Ratio, 0.0-1.0)", default="0.85")
-    days = Prompt.ask("Evaluation days (number or 'max')", default="365")
+    days = Prompt.ask("Evaluation days (number or 'max')", default="max")
     train_window = Prompt.ask("Training window (number or 'max')", default="max")
-    max_iter = IntPrompt.ask("Max optimization iterations", default=10)
+    max_depth = IntPrompt.ask("XGBoost max depth", default=5)
+    n_estimators = IntPrompt.ask("XGBoost n_estimators (final trees)", default=50)
+    epochs = IntPrompt.ask("Training epochs", default=5)
 
-    use_gpu = Confirm.ask("\nUse GPU acceleration?", default=True)
-    force = Confirm.ask("Replace champion if better?", default=True)
+    use_gpu = Confirm.ask("\nUse GPU acceleration?", default=False)
+
+    console.print(f"\n[dim]Training will progressively improve from {n_estimators // epochs} to {n_estimators} trees over {epochs} epochs[/dim]")
 
     cmd = ["uv", "run", "python", "scripts/train.py",
-           "--target", target,
            "--days", days,
            "--train-window", train_window,
-           "--max-iter", str(max_iter)]
-
-    if force:
-        cmd.append("--force")
+           "--max-depth", str(max_depth),
+           "--n-estimators", str(n_estimators),
+           "--epochs", str(epochs)]
 
     if use_gpu:
         cmd.append("--gpu")

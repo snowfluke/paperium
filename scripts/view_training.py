@@ -46,49 +46,69 @@ def display_session(session_file: str):
         console.print(f"[red]Error loading session file: {e}[/red]")
         return
 
+    # Handle both old (iterations) and new (epochs) structure
+    epochs = data.get('epochs', [])
     iterations = data.get('iterations', [])
-    if not iterations:
-        console.print("[yellow]No iteration data found.[/yellow]")
+    items = epochs if epochs else iterations
+
+    if not items:
+        console.print("[yellow]No training data found.[/yellow]")
         return
 
-    # Extract metrics
-    win_rates = [it['metrics']['win_rate'] for it in iterations]
-    wl_ratios = [it['metrics']['wl_ratio'] for it in iterations]
-    total_returns = [it['metrics']['total_return'] for it in iterations]
-    sharpe_ratios = [it['metrics']['sharpe_ratio'] for it in iterations]
-    max_drawdowns = [it['metrics']['max_drawdown'] for it in iterations]
+    # Extract metrics (compatible with both structures)
+    win_rates = [it['metrics']['win_rate'] for it in items]
+    wl_ratios = [it['metrics']['wl_ratio'] for it in items]
+    total_returns = [it['metrics']['total_return'] for it in items]
+    sharpe_ratios = [it['metrics']['sharpe_ratio'] for it in items]
+    max_drawdowns = [it['metrics'].get('max_drawdown', 0) for it in items]  # May not exist in epoch structure
 
     # Session header
     params = data.get('parameters', {})
     session_id = data.get('session_id', 'Unknown')
+    item_type = "Epochs" if epochs else "Iterations"
 
     header = Panel(
         f"[bold cyan]Training Session: {session_id}[/bold cyan]\n"
         f"[dim]Started: {data.get('start_time', 'Unknown')}[/dim]\n"
-        f"[dim]Target: {params.get('target_score', 0):.1%} | "
-        f"Max Depth: {params.get('max_depth', '?')} | "
+        f"[dim]Max Depth: {params.get('max_depth', '?')} | "
         f"Estimators: {params.get('n_estimators', '?')} | "
-        f"Iterations: {len(iterations)}/{params.get('max_iter', '?')}[/dim]",
+        f"{item_type}: {len(items)}/{params.get('epochs', params.get('max_iter', '?'))}[/dim]",
         border_style="cyan",
         box=box.DOUBLE
     )
     console.print(header)
 
-    # Best iteration summary
-    best = data.get('best_iteration', {})
-    if best:
-        best_panel = Panel(
-            f"[bold green]Best Iteration: #{best.get('iteration', '?')}[/bold green]\n"
-            f"Win Rate: [bold]{best.get('win_rate', 0):.1%}[/bold] | "
-            f"W/L: [bold]{best.get('wl_ratio', 0):.2f}x[/bold] | "
-            f"Return: [bold]{best.get('total_return', 0):.1f}%[/bold] | "
-            f"Score: [bold yellow]{best.get('composite_score', 0):.4f}[/bold yellow]",
-            border_style="green"
-        )
-        console.print(best_panel)
+    # Best epoch/iteration summary
+    if epochs:
+        # New structure
+        best_epoch_idx = data.get('best_epoch', 1) - 1
+        if 0 <= best_epoch_idx < len(epochs):
+            best_metrics = epochs[best_epoch_idx]['metrics']
+            best_panel = Panel(
+                f"[bold green]Best Epoch: #{epochs[best_epoch_idx]['epoch']}[/bold green]\n"
+                f"Win Rate: [bold]{best_metrics.get('win_rate', 0):.1%}[/bold] | "
+                f"W/L: [bold]{best_metrics.get('wl_ratio', 0):.2f}x[/bold] | "
+                f"Return: [bold]{best_metrics.get('total_return', 0):.1f}%[/bold] | "
+                f"Sharpe: [bold yellow]{best_metrics.get('sharpe_ratio', 0):.2f}[/bold yellow]",
+                border_style="green"
+            )
+            console.print(best_panel)
+    else:
+        # Old structure
+        best = data.get('best_iteration', {})
+        if best:
+            best_panel = Panel(
+                f"[bold green]Best Iteration: #{best.get('iteration', '?')}[/bold green]\n"
+                f"Win Rate: [bold]{best.get('win_rate', 0):.1%}[/bold] | "
+                f"W/L: [bold]{best.get('wl_ratio', 0):.2f}x[/bold] | "
+                f"Return: [bold]{best.get('total_return', 0):.1f}%[/bold] | "
+                f"Score: [bold yellow]{best.get('composite_score', 0):.4f}[/bold yellow]",
+                border_style="green"
+            )
+            console.print(best_panel)
 
     # Metrics progression table
-    console.print("\n[bold yellow]Iteration Metrics:[/bold yellow]\n")
+    console.print(f"\n[bold yellow]{item_type} Metrics:[/bold yellow]\n")
 
     metrics_table = Table(show_header=True, header_style="bold magenta", box=box.ROUNDED)
     metrics_table.add_column("#", justify="right", style="cyan")
@@ -100,21 +120,24 @@ def display_session(session_file: str):
     metrics_table.add_column("Max DD", justify="right")
     metrics_table.add_column("Trades", justify="right")
 
-    for it in iterations:
+    for it in items:
         metrics = it['metrics']
 
         # Color coding based on performance
         wr = metrics['win_rate']
-        wr_color = "green" if wr >= params.get('target_score', 0.85) else "yellow" if wr >= 0.6 else "red"
-        
-        # Composite score (new in Gen 6)
+        wr_color = "green" if wr >= 0.75 else "yellow" if wr >= 0.6 else "red"
+
+        # Composite score (may not exist in epoch structure)
         score = metrics.get('composite_score', 0)
 
+        # Use epoch or iteration number
+        item_num = str(it.get('epoch', it.get('iteration', '?')))
+
         metrics_table.add_row(
-            str(it['iteration']),
+            item_num,
             f"[{wr_color}]{wr:.1%}[/{wr_color}]",
             f"{metrics['wl_ratio']:.2f}x",
-            f"{score:.4f}",
+            f"{score:.4f}" if score > 0 else "-",
             f"{metrics['total_return']:.1f}%",
             f"{metrics['sharpe_ratio']:.2f}",
             f"{metrics['max_drawdown']:.1f}%",
@@ -158,8 +181,8 @@ def display_session(session_file: str):
 
     console.print(charts_table)
 
-    # Show last iteration details if available
-    if iterations:
+    # Show last iteration details if available (only for old structure)
+    if iterations and not epochs:
         last_iter = iterations[-1]
         console.print(f"\n[bold yellow]Latest Iteration (#{last_iter['iteration']}):[/bold yellow]\n")
 
@@ -199,12 +222,25 @@ def display_session(session_file: str):
             console.print(exit_table)
 
 def list_sessions():
-    """List all available training session files."""
+    """List all available training session directories."""
     models_dir = Path('models')
-    session_files = sorted(models_dir.glob('training_session_*.json'), reverse=True)
+
+    # Look for new directory structure (training_YYYYMMDD_HHMMSS/)
+    session_dirs = sorted([d for d in models_dir.glob('training_*') if d.is_dir()], reverse=True)
+
+    # Fall back to old flat file structure for backward compatibility
+    if not session_dirs:
+        old_session_files = sorted(models_dir.glob('training_session_*.json'), reverse=True)
+        if not old_session_files:
+            console.print("[yellow]No training sessions found.[/yellow]")
+            return []
+        return old_session_files
+
+    # Convert to session.json paths
+    session_files = [d / 'session.json' for d in session_dirs if (d / 'session.json').exists()]
 
     if not session_files:
-        console.print("[yellow]No training session files found.[/yellow]")
+        console.print("[yellow]No valid training sessions found.[/yellow]")
         return []
 
     console.print("\n[bold cyan]Available Training Sessions:[/bold cyan]\n")
@@ -213,7 +249,7 @@ def list_sessions():
     table.add_column("#", justify="right", style="cyan")
     table.add_column("Session ID", style="yellow")
     table.add_column("Started", style="dim")
-    table.add_column("Iterations", justify="center")
+    table.add_column("Epochs", justify="center")
     table.add_column("Best Win Rate", justify="right")
     table.add_column("Best W/L", justify="right")
 
@@ -222,16 +258,37 @@ def list_sessions():
             data = json.load(f)
 
         params = data.get('parameters', {})
-        iterations = len(data.get('iterations', []))
-        best = data.get('best_iteration', {})
+
+        # Handle both old (iterations) and new (epochs) structure
+        epochs = data.get('epochs', [])
+        iterations = data.get('iterations', [])
+        items = epochs if epochs else iterations
+        item_count = len(items)
+
+        # Find best metrics
+        if epochs:
+            # New structure
+            best_epoch_idx = data.get('best_epoch', 1) - 1
+            if 0 <= best_epoch_idx < len(epochs):
+                best_metrics = epochs[best_epoch_idx]['metrics']
+                win_rate = best_metrics.get('win_rate', 0)
+                wl_ratio = best_metrics.get('wl_ratio', 0)
+            else:
+                win_rate = 0
+                wl_ratio = 0
+        else:
+            # Old structure
+            best = data.get('best_iteration', {})
+            win_rate = best.get('win_rate', 0) if best else 0
+            wl_ratio = best.get('wl_ratio', 0) if best else 0
 
         table.add_row(
             str(i),
             data.get('session_id', 'Unknown'),
             data.get('start_time', 'Unknown')[:19],
-            f"{iterations}/{params.get('max_iter', '?')}",
-            f"[green]{best.get('win_rate', 0):.1%}[/green]" if best else "-",
-            f"{best.get('wl_ratio', 0):.2f}x" if best else "-"
+            f"{item_count}/{params.get('epochs', params.get('max_iter', '?'))}",
+            f"[green]{win_rate:.1%}[/green]" if win_rate > 0 else "-",
+            f"{wl_ratio:.2f}x" if wl_ratio > 0 else "-"
         )
 
     console.print(table)

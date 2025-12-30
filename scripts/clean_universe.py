@@ -8,17 +8,27 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from config import config
+from data.blacklist import BLACKLIST_UNIVERSE
 
 def clean_universe():
-    print(f"Cleaning universe of {len(config.data.stock_universe)} stocks...")
+    print(f"Starting with {len(config.data.stock_universe)} stocks in universe...")
+
+    # Step 1: Filter out blacklisted stocks FIRST
+    initial_universe = config.data.stock_universe
+    filtered_universe = [ticker for ticker in initial_universe if ticker not in BLACKLIST_UNIVERSE]
+
+    removed_by_blacklist = len(initial_universe) - len(filtered_universe)
+    print(f"Removed {removed_by_blacklist} blacklisted stocks")
+    print(f"Remaining: {len(filtered_universe)} stocks to check for activity...\n")
+
     cutoff_date = datetime.now() - timedelta(days=30)
     active_stocks = []
     failed_tickers = []
     
-    # 1. Try batching first in chunks of 20 (smaller is safer for timeouts)
+    # Step 2: Check activity for non-blacklisted stocks (batched)
     chunk_size = 20
-    for i in range(0, len(config.data.stock_universe), chunk_size):
-        chunk = config.data.stock_universe[i:i+chunk_size]
+    for i in range(0, len(filtered_universe), chunk_size):
+        chunk = filtered_universe[i:i+chunk_size]
         print(f"  Checking chunk {i//chunk_size + 1} ({len(chunk)} stocks)...")
         
         try:
@@ -70,8 +80,12 @@ def clean_universe():
 
     # Remove duplicates but maintain some order if possible
     active_stocks = list(dict.fromkeys(active_stocks))
-    
-    print(f"\nFinal active count: {len(active_stocks)} (Removed {len(config.data.stock_universe) - len(active_stocks)})")
+
+    print(f"\n[Summary]")
+    print(f"  Started with: {len(initial_universe)} stocks")
+    print(f"  Blacklisted: -{removed_by_blacklist} stocks")
+    print(f"  Inactive/No data: -{len(filtered_universe) - len(active_stocks)} stocks")
+    print(f"  Final active count: {len(active_stocks)} stocks")
     
     # Update data/universe.py
     with open('data/universe.py', 'r+') as f:

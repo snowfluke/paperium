@@ -56,12 +56,12 @@ class MLConfig:
     # Note: Based on training results, 50 trees is the sweet spot before overfitting
     # Regularization allows using more trees without overfitting
     n_estimators: int = 500
-    max_depth: int = 4
-    learning_rate: float = 0.05
+    max_depth: int = 5
+    learning_rate: float = 0.1
     min_child_weight: int = 5
 
     # Regularization parameters (prevent overfitting)
-    subsample: float = 0.7  # Use 70% of data per tree (randomness prevents overfitting)
+    subsample: float = 0.8  # Use 80% of data per tree (randomness prevents overfitting)
     colsample_bytree: float = 0.7  # Use 70% of features per tree
     gamma: float = 0.2  # Minimum loss reduction required to split (conservative)
     reg_alpha: float = 1.0       # Stronger L1 regularization (feature selection)
@@ -86,7 +86,7 @@ class ExitConfig:
     max_loss_pct: float = 0.08    # Tighten max loss to 8% (preservation is key)
     min_profit_pct: float = 0.15  # Realistic 15% upside target for 1 week
  
-    signal_threshold: float = 0.55  # Minimum ML signal to enter/hold position
+    signal_threshold: float = 0.40  # Minimum ML signal to enter/hold position
 
 @dataclass
 class PortfolioConfig:
@@ -100,7 +100,7 @@ class PortfolioConfig:
     max_sector_exposure: float = 0.25  # 25% max per sector
     
     # Liquidity filter
-    min_avg_volume: int = 2_000_000  # 2M shares minimum
+    min_avg_volume: int = 1_000_000  # 2M shares minimum
     min_market_cap: float = 2e12  # 2 Trillion IDR minimum
     
     # Risk management

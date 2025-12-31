@@ -140,7 +140,7 @@ def display_session(session_file: str):
             f"{score:.4f}" if score > 0 else "-",
             f"{metrics['total_return']:.1f}%",
             f"{metrics['sharpe_ratio']:.2f}",
-            f"{metrics['max_drawdown']:.1f}%",
+            f"{metrics.get('max_drawdown', 0):.1f}%",
             str(metrics['total_trades'])
         )
 

@@ -2,9 +2,9 @@
 
 ![LSTM Architecture](https://upload.wikimedia.org/wikipedia/commons/3/3b/The_LSTM_cell.png)
 
-**System Type**: Deep Learning Quantitative Trading
-**Target Market**: Indonesia Stock Exchange (IHSG)
-**Model Architecture**: LSTM (Long Short-Term Memory)
+**System Type**: Deep Learning Quantitative Trading\
+**Target Market**: Indonesia Stock Exchange (IHSG)\
+**Model Architecture**: LSTM (Long Short-Term Memory)\
 **Labeling Scheme**: Triple Barrier Method
 
 Paperium is a sophisticated quantitative trading system for the Indonesia Stock Exchange (IHSG). It implements state-of-the-art Deep Learning (LSTM) trained on raw OHLCV sequences, guided by **Triple Barrier Labeling**, as described in recent financial machine learning research.

@@ -35,7 +35,7 @@ class MLConfig:
     dropout: float = 0.0
     
     # Training
-    batch_size: int = 64
+    batch_size: int = 256  # Increased for better GPU utilization (T4 can handle much more)
     learning_rate: float = 0.001
     epochs: int = 50
     patience: int = 10  # Early stopping

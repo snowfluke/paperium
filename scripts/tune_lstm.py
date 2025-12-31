@@ -44,8 +44,22 @@ def train_evaluate_config(X_train, y_train, X_val, y_val, params: Dict, device, 
     train_dataset = TBLDataset(X_train, y_train)
     val_dataset = TBLDataset(X_val, y_val)
     
-    train_loader = DataLoader(train_dataset, batch_size=params['batch_size'], shuffle=True, drop_last=True)
-    val_loader = DataLoader(val_dataset, batch_size=params['batch_size'], shuffle=False)
+    num_workers = 2 if torch.cuda.is_available() else 0
+    train_loader = DataLoader(
+        train_dataset,
+        batch_size=params['batch_size'],
+        shuffle=True,
+        drop_last=True,
+        num_workers=num_workers,
+        pin_memory=torch.cuda.is_available()
+    )
+    val_loader = DataLoader(
+        val_dataset,
+        batch_size=params['batch_size'],
+        shuffle=False,
+        num_workers=num_workers,
+        pin_memory=torch.cuda.is_available()
+    )
     
     # Init Model
     model = LSTMModel(
@@ -129,9 +143,12 @@ def main():
         border_style="cyan"
     ))
 
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    if torch.backends.mps.is_available():
+    if torch.cuda.is_available():
+        device = torch.device('cuda')
+    elif torch.backends.mps.is_available():
         device = torch.device('mps')
+    else:
+        device = torch.device('cpu')
     console.print(f"Using device: {device}")
     
     # 1. Load Data (Subset for speed)
@@ -170,10 +187,10 @@ def main():
 
     # 3. Parameter Grid
     grid = [
-        {'hidden_size': 8, 'num_layers': 2, 'dropout': 0.0, 'lr': 0.001, 'batch_size': 64},
-        {'hidden_size': 16, 'num_layers': 2, 'dropout': 0.0, 'lr': 0.001, 'batch_size': 64},
-        {'hidden_size': 32, 'num_layers': 2, 'dropout': 0.2, 'lr': 0.001, 'batch_size': 64},
-        {'hidden_size': 8, 'num_layers': 4, 'dropout': 0.2, 'lr': 0.001, 'batch_size': 64},
+        {'hidden_size': 8, 'num_layers': 2, 'dropout': 0.0, 'lr': 0.001, 'batch_size': 256},
+        {'hidden_size': 16, 'num_layers': 2, 'dropout': 0.0, 'lr': 0.001, 'batch_size': 256},
+        {'hidden_size': 32, 'num_layers': 2, 'dropout': 0.2, 'lr': 0.001, 'batch_size': 256},
+        {'hidden_size': 8, 'num_layers': 4, 'dropout': 0.2, 'lr': 0.001, 'batch_size': 256},
     ]
 
     logger.log(f"Testing {len(grid)} hyperparameter configurations")

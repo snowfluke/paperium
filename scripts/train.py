@@ -229,8 +229,25 @@ def main():
         train_dataset = TBLDataset(X_train, y_train)
         val_dataset = TBLDataset(X_val, y_val)
 
-        train_loader = DataLoader(train_dataset, batch_size=config.ml.batch_size, shuffle=True, drop_last=True)
-        val_loader = DataLoader(val_dataset, batch_size=config.ml.batch_size, shuffle=False)
+        # Optimize for GPU: parallel loading + pinned memory for faster transfer
+        num_workers = 2 if torch.cuda.is_available() else 0
+        train_loader = DataLoader(
+            train_dataset,
+            batch_size=config.ml.batch_size,
+            shuffle=True,
+            drop_last=True,
+            num_workers=num_workers,
+            pin_memory=torch.cuda.is_available(),
+            persistent_workers=num_workers > 0
+        )
+        val_loader = DataLoader(
+            val_dataset,
+            batch_size=config.ml.batch_size,
+            shuffle=False,
+            num_workers=num_workers,
+            pin_memory=torch.cuda.is_available(),
+            persistent_workers=num_workers > 0
+        )
 
     logger.log(f"[green]✓ Data Loaded:[/green] {len(X_train):,} train samples, {len(X_val):,} val samples")
 

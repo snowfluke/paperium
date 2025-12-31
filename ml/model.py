@@ -52,9 +52,12 @@ class ModelWrapper:
     
     def __init__(self, config):
         self.config = config.ml
-        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        if torch.backends.mps.is_available():
+        if torch.cuda.is_available():
+            self.device = torch.device('cuda')
+        elif torch.backends.mps.is_available():
             self.device = torch.device('mps')
+        else:
+            self.device = torch.device('cpu')
             
         self.model = LSTMModel(
             input_size=self.config.input_size,

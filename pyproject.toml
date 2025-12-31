@@ -1,7 +1,7 @@
 [project]
-name = "ihsg-quant-trading"
-version = "1.0.0"
-description = "Jim Simons-inspired quantitative trading model for Indonesian stocks (IHSG)"
+name = "paperium"
+version = "2.1.0"
+description = "Indonesia Stock Exchange (IHSG) Deep Learning Trading System"
 requires-python = ">=3.12"
 
 dependencies = [

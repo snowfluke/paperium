@@ -14,7 +14,7 @@ Paper: https://arxiv.org/pdf/2504.02249v1
 ![Paperium Signals](images/signals.png)
 
 > [!IMPORTANT]  
-> For Paperium XGBoost version especially gen 4 and prior, go to the bottom page.
+> Paperium V0 and Paperium V1 still available in the branch section with differnt model architecture
 
 ## Table of Contents
 
@@ -30,7 +30,6 @@ Paper: https://arxiv.org/pdf/2504.02249v1
 10. [Configuration](#configuration)
 11. [Performance Optimization](#performance-optimization)
 12. [Known Issues & Future Work](#known-issues--future-work)
-13. [Gen 4 Paperium XGBoost](#gen4-paperium-xgboost)
 
 ## Core Philosophy
 
@@ -716,22 +715,7 @@ Shows both total elapsed time and step duration.
 - **Reinforcement learning** - Adaptive position sizing
 - **Volatility regime detection** - Adjust barriers by market conditions
 - **Transaction cost modeling** - Include brokerage fees
-
-## Gen 4 Paperium XGBoost
-
-You can go to this commit point: https://github.com/snowfluke/paperium/tree/ef88c4fc5be7ad8d322b4c8c0664920f5704e798
-
-But you need to patch the `strategy/position_manager.py` to the dataclass position.
-
-```py
-@dataclass
-class Position:
-    ...
-    ...
-    id: Optional[int] = None
-    updated_at: Optional[str] = None
-```
-
+- 
 ## Performance Notes
 
 ### Optimal Hyperparameters

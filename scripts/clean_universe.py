@@ -9,18 +9,24 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from config import config
 from data.blacklist import BLACKLIST_UNIVERSE
+from utils.logger import TimedLogger
 
 def clean_universe():
+    logger = TimedLogger()
+    logger.log("Starting universe cleaning")
     print(f"Starting with {len(config.data.stock_universe)} stocks in universe...")
 
     # Step 1: Filter out blacklisted stocks FIRST
+    logger.log("Loading data and filtering blacklisted stocks")
     initial_universe = config.data.stock_universe
     filtered_universe = [ticker for ticker in initial_universe if ticker not in BLACKLIST_UNIVERSE]
 
     removed_by_blacklist = len(initial_universe) - len(filtered_universe)
     print(f"Removed {removed_by_blacklist} blacklisted stocks")
     print(f"Remaining: {len(filtered_universe)} stocks to check for activity...\n")
+    logger.log(f"Filtered to {len(filtered_universe)} tickers (removed {removed_by_blacklist} blacklisted)")
 
+    logger.log("Checking ticker activity")
     cutoff_date = datetime.now() - timedelta(days=30)
     active_stocks = []
     failed_tickers = []
@@ -81,6 +87,8 @@ def clean_universe():
     # Remove duplicates but maintain some order if possible
     active_stocks = list(dict.fromkeys(active_stocks))
 
+    logger.log(f"Activity check complete: {len(active_stocks)} active tickers found")
+
     print(f"\n[Summary]")
     print(f"  Started with: {len(initial_universe)} stocks")
     print(f"  Blacklisted: -{removed_by_blacklist} stocks")
@@ -104,7 +112,8 @@ def clean_universe():
         f.seek(0)
         f.write(new_content)
         f.truncate()
-        
+
+    logger.log("Universe cleaning complete")
     print("✓ data/universe.py updated with robust active universe.")
 
 if __name__ == "__main__":

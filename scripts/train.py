@@ -1,367 +1,333 @@
 #!/usr/bin/env python3
 """
-Progressive Model Training
-Shows incremental improvement like training YOLO - each epoch gets better.
+LSTM Training Script
+Trains a PyTorch LSTM model using Raw OHLCV + Triple Barrier Labeling.
+Features:
+- Rich UI with Progress Bars and Metrics
+- Session Management (models/training_session_{TIMESTAMP})
+- Warm Start / Resume Capability
 """
 import sys
 import os
-import argparse
 import sqlite3
-from datetime import datetime, timedelta
 import pandas as pd
+import numpy as np
+import torch
+import pickle
+import argparse
+import time
+import hashlib
+from datetime import datetime
+from torch.utils.data import DataLoader
 from rich.console import Console
-from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TimeElapsedColumn
-from rich.table import Table
 from rich.live import Live
-import json
+from rich.table import Table
+from rich.panel import Panel
+from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn, TimeElapsedColumn, TimeRemainingColumn, TaskProgressColumn
+from rich.layout import Layout
+from collections import deque
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from config import config
-from scripts.eval import MLBacktest
-from ml.features import FeatureEngineer
+from ml.model import ModelWrapper
+from ml.features import FeatureEngineer, TBLDataset
+from utils.logger import TimedLogger
 
 console = Console()
 
-def main():
-    parser = argparse.ArgumentParser(description='Progressive Model Training')
-    parser.add_argument('--days', type=str, default='max', help='Evaluation period')
-    parser.add_argument('--train-window', type=str, default='max', help='Training window')
-    parser.add_argument('--max-depth', type=int, default=5, help='XGBoost max depth')
-    parser.add_argument('--n-estimators', type=int, default=50, help='Final n_estimators (50 = sweet spot)')
-    parser.add_argument('--gpu', action='store_true', help='Use GPU')
-    parser.add_argument('--epochs', type=int, default=5, help='Number of training epochs (5 = 10 trees/epoch)')
+def load_data(db_path):
+    conn = sqlite3.connect(db_path)
+    query = "SELECT date, ticker, open, high, low, close, volume FROM prices ORDER BY date"
+    df = pd.read_sql_query(query, conn)
+    conn.close()
+    df['date'] = pd.to_datetime(df['date'])
+    return df
 
+def get_db_version(db_path):
+    """Get latest date + row count hash to detect DB changes."""
+    conn = sqlite3.connect(db_path)
+    cursor = conn.cursor()
+    cursor.execute("SELECT MAX(date), COUNT(*) FROM prices")
+    max_date, row_count = cursor.fetchone()
+    conn.close()
+    return f"{max_date}_{row_count}" if max_date else "empty"
+
+def load_or_compute_sequences(df, config, logger, cache_dir=".cache/sequences"):
+    """
+    Load cached sequences or compute from scratch.
+    Cache invalidates when DB version changes.
+    """
+    os.makedirs(cache_dir, exist_ok=True)
+
+    # Create cache key based on DB version + config params
+    db_version = get_db_version(config.data.db_path)
+    config_hash = hashlib.md5(
+        f"{config.data.window_size}_{config.ml.tbl_horizon}_{config.ml.tbl_barrier}".encode()
+    ).hexdigest()[:8]
+    cache_key = f"sequences_{db_version}_{config_hash}.pkl"
+    cache_path = os.path.join(cache_dir, cache_key)
+
+    if os.path.exists(cache_path):
+        logger.log(f"[green]✓ Loading cached sequences from {cache_key}[/green]")
+        with open(cache_path, 'rb') as f:
+            return pickle.load(f)
+
+    # Compute sequences from scratch
+    logger.log(f"[yellow]Cache miss - computing sequences...[/yellow]")
+    feature_eng = FeatureEngineer(config)
+
+    all_X = []
+    all_y = []
+    tickers = df['ticker'].unique()
+
+    with Progress(
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        TaskProgressColumn(),
+        TextColumn("•"),
+        TimeRemainingColumn(),
+        console=console
+    ) as progress:
+        task = progress.add_task(
+            f"[cyan]Processing {len(tickers)} tickers...",
+            total=len(tickers)
+        )
+
+        for ticker in tickers:
+            ticker_df = df[df['ticker'] == ticker].copy()
+            if len(ticker_df) >= config.data.window_size + config.ml.tbl_horizon:
+                X, y = feature_eng.create_sequences(ticker_df, is_training=True)
+                if len(X) > 0:
+                    all_X.append(X)
+                    all_y.append(y)
+
+            progress.update(task, advance=1)
+
+    logger.log(f"[cyan]Concatenating {len(all_X)} ticker sequences...[/cyan]")
+    X_combined = np.concatenate(all_X)
+    y_combined = np.concatenate(all_y)
+    logger.log(f"[green]✓ Combined {len(X_combined):,} samples[/green]")
+
+    # Save to cache
+    logger.log(f"[cyan]Saving to cache...[/cyan]")
+    with open(cache_path, 'wb') as f:
+        pickle.dump((X_combined, y_combined), f)
+    logger.log(f"[green]✓ Cache saved: {cache_key}[/green]")
+
+    return X_combined, y_combined
+
+class TrainingDashboard:
+    def __init__(self, epochs, session_id):
+        self.epochs = epochs
+        self.session_id = session_id
+
+        # Metric history for sparklines/trends (last 10)
+        self.history = {
+            'train_loss': deque(maxlen=10),
+            'val_loss': deque(maxlen=10),
+            'val_acc': deque(maxlen=10)
+        }
+        self.best_val_loss = float('inf')
+        self.best_epoch = 0
+        self.start_time = time.time()
+        self.current_batch = 0
+        self.total_batches = 0
+
+    def get_layout(self, current_epoch, train_loss, val_loss, val_acc, status="Running", batch_info=None):
+        if val_loss < self.best_val_loss and val_loss > 0:
+            self.best_val_loss = val_loss
+            self.best_epoch = current_epoch
+
+        layout = Layout()
+        layout.split_column(
+            Layout(name="header", size=3),
+            Layout(name="body", ratio=1)
+        )
+
+        # Header
+        elapsed = time.time() - self.start_time
+        header_text = (
+            f"[bold cyan]Paperium LSTM Training[/bold cyan] | "
+            f"Session: [bold yellow]{self.session_id}[/bold yellow] | "
+            f"Time: {int(elapsed//60):02d}:{int(elapsed%60):02d}"
+        )
+        layout["header"].update(Panel(header_text, style="blue"))
+
+        # Metrics Table
+        table = Table(title="Training Metrics", expand=True, border_style="blue")
+        table.add_column("Metric", style="cyan")
+        table.add_column("Current", justify="right")
+        table.add_column("Best", justify="right", style="green")
+
+        table.add_row("Epoch", f"{current_epoch}/{self.epochs}", f"Best: {self.best_epoch}")
+
+        # Show batch progress if training
+        if batch_info:
+            batch_pct = (batch_info['current'] / batch_info['total'] * 100) if batch_info['total'] > 0 else 0
+            batch_str = f"{batch_info['current']}/{batch_info['total']} ({batch_pct:.0f}%)"
+            table.add_row("Batch", batch_str, "-")
+
+        table.add_row("Train Loss", f"{train_loss:.4f}", "-")
+
+        best_loss_str = f"{self.best_val_loss:.4f}" if self.best_val_loss != float('inf') else "-"
+        color = "green" if val_loss <= self.best_val_loss and val_loss > 0 else "white"
+        table.add_row("Val Loss", f"[{color}]{val_loss:.4f}[/{color}]", best_loss_str)
+
+        table.add_row("Val Accuracy", f"{val_acc:.2%}", "-")
+        table.add_row("Status", status, "")
+
+        layout["body"].update(Panel(table, title="Active Monitoring", border_style="blue"))
+        return layout
+
+def main():
+    parser = argparse.ArgumentParser(description='Paperium LSTM Training')
+    parser.add_argument('--epochs', type=int, default=50, help='Number of epochs')
+    parser.add_argument('--resume', type=str, help='Path to checkpoint to resume from (e.g. models/session_X/last.pt)')
+    parser.add_argument('--retrain', action='store_true', help='Continue training from best_lstm.pt if it exists')
     args = parser.parse_args()
 
-    # Update config
-    config.ml.use_gpu = args.gpu
-    config.ml.max_depth = args.max_depth
-    config.ml.n_estimators = args.n_estimators
+    # Initialize timed logger
+    logger = TimedLogger()
 
-    # Process dates
-    if args.days == 'max' or args.train_window == 'max':
-        conn = sqlite3.connect(config.data.db_path)
-        df_dates = pd.read_sql("SELECT MIN(date), MAX(date) FROM prices", conn)
-        conn.close()
-
-        if args.days == 'max':
-            eval_days = 365
-            console.print(f"[dim]Auto-setting eval days to {eval_days} (1 year)[/dim]")
+    # Determine checkpoint path
+    checkpoint_path = None
+    if args.retrain:
+        if os.path.exists("models/best_lstm.pt"):
+            checkpoint_path = "models/best_lstm.pt"
+            logger.log(f"[yellow]Retrain mode: Using existing model at {checkpoint_path}[/yellow]")
         else:
-            eval_days = int(args.days)
+            logger.log(f"[yellow]Retrain mode: No existing model found, starting fresh[/yellow]")
+    elif args.resume:
+        checkpoint_path = args.resume
 
-        if args.train_window == 'max':
-            train_window = 756  # 3 years
-            console.print(f"[dim]Auto-setting train window to {train_window} days (3 years)[/dim]")
-        else:
-            train_window = int(args.train_window)
-    else:
-        eval_days = int(args.days)
-        train_window = int(args.train_window)
-
-    console.print(f"[bold cyan]Progressive Model Training[/bold cyan]")
-    console.print(f"[dim]Like training YOLO - watch the model improve each epoch[/dim]\n")
-
-    # Session setup - create dedicated folder for this training run
-    session_id = datetime.now().strftime('%Y%m%d_%H%M%S')
-    session_dir = f"models/training_{session_id}"
+    # 0. Setup Session
+    session_id = datetime.now().strftime("%Y%m%d_%H%M%S")
+    session_dir = os.path.join("models", f"training_session_{session_id}")
     os.makedirs(session_dir, exist_ok=True)
 
-    session_file = f"{session_dir}/session.json"
-    session_data = {
-        "session_id": session_id,
-        "session_dir": session_dir,
-        "start_time": datetime.now().isoformat(),
-        "parameters": {
-            "max_depth": args.max_depth,
-            "n_estimators": args.n_estimators,
-            "epochs": args.epochs,
-            "eval_days": eval_days,
-            "train_window": train_window,
-            "use_gpu": args.gpu,
-            "sl_atr_mult": config.exit.stop_loss_atr_mult,
-            "tp_atr_mult": config.exit.take_profit_atr_mult,
-            "signal_threshold": config.exit.signal_threshold
-        },
-        "epochs": []
-    }
+    logger.log(f"[bold cyan]Initializing Session: {session_id}[/bold cyan]")
 
-    console.print(f"[dim]Session folder: {session_dir}[/dim]")
+    # 1. Load Data (with sequence caching)
+    with console.status("[yellow]Loading market data from SQLite...[/yellow]"):
+        df = load_data(config.data.db_path)
 
-    # Feature set
-    feature_eng = FeatureEngineer(config.ml)
-    feature_count = len(feature_eng.feature_set)
+    logger.log(f"[green]✓ Loaded {len(df):,} price records[/green]")
 
-    console.print(f"[bold green]Universal Feature Set ({feature_count} features)[/bold green]")
-    console.print("  Base 46 technical indicators")
-    console.print("  5 intraday behavior proxies\n")
+    # Load or compute sequences (uses cache if DB hasn't changed)
+    X_combined, y_combined = load_or_compute_sequences(df, config, logger)
 
-    # Config display
-    console.print(f"[bold]Configuration:[/bold]")
-    console.print(f"  SL/TP: {config.exit.stop_loss_atr_mult:.1f}x / {config.exit.take_profit_atr_mult:.1f}x ATR")
-    console.print(f"  Signal Threshold: {config.exit.signal_threshold:.2f}")
-    console.print(f"  Max Depth: {args.max_depth}")
-    console.print(f"  Total Estimators: {args.n_estimators}")
-    console.print(f"  Training Epochs: {args.epochs}\n")
+    logger.log(f"[green]✓ Sequences ready:[/green] {len(X_combined):,} total samples")
 
-    # GPU warning
-    if args.gpu:
-        import sys as sys_module
-        if sys_module.platform == "darwin":
-            console.print("[yellow]XGBoost MPS (Metal) can be unstable. Using CPU 'hist' instead.[/yellow]\n")
+    with console.status("[yellow]Splitting train/validation sets...[/yellow]"):
+        from sklearn.model_selection import train_test_split
+        X_train, X_val, y_train, y_val = train_test_split(X_combined, y_combined, test_size=0.2, random_state=42, shuffle=True)
 
-    # Date range
-    end_date = datetime.now().strftime('%Y-%m-%d')
-    if args.days == 'max':
-        current_year = datetime.now().year
-        start_date = f"{current_year - 1}-12-01"
-        console.print(f"[dim]Eval period: {start_date} to {end_date}[/dim]\n")
-    else:
-        start_date = (datetime.now() - timedelta(days=eval_days)).strftime('%Y-%m-%d')
+    logger.log(f"[green]✓ Train/val split complete[/green]")
 
-    # Progressive training - like YOLO epochs
-    console.print(f"[bold magenta]Starting Progressive Training ({args.epochs} epochs)[/bold magenta]\n")
+    with console.status("[yellow]Creating data loaders...[/yellow]"):
+        train_dataset = TBLDataset(X_train, y_train)
+        val_dataset = TBLDataset(X_val, y_val)
 
-    # Calculate estimators per epoch
-    estimators_per_epoch = max(10, args.n_estimators // args.epochs)
+        train_loader = DataLoader(train_dataset, batch_size=config.ml.batch_size, shuffle=True, drop_last=True)
+        val_loader = DataLoader(val_dataset, batch_size=config.ml.batch_size, shuffle=False)
 
-    # Warn if configuration is suboptimal
-    if args.n_estimators < args.epochs * 10:
-        console.print(f"[yellow]Warning: n_estimators ({args.n_estimators}) < epochs ({args.epochs}) * 10[/yellow]")
-        console.print(f"[yellow]Consider using --n-estimators {args.epochs * 10} or --epochs {args.n_estimators // 10}[/yellow]\n")
+    logger.log(f"[green]✓ Data Loaded:[/green] {len(X_train):,} train samples, {len(X_val):,} val samples")
 
-    # Results table
-    results_table = Table(show_header=True, header_style="bold cyan")
-    results_table.add_column("Epoch", justify="right", style="cyan")
-    results_table.add_column("Trees", justify="right")
-    results_table.add_column("Win Rate", justify="right")
-    results_table.add_column("W/L", justify="right")
-    results_table.add_column("Trades", justify="right")
-    results_table.add_column("Return", justify="right")
-    results_table.add_column("Sharpe", justify="right")
-    results_table.add_column("Status", justify="left")
+    # 2. Init Model
+    logger.log(f"[cyan]Initializing LSTM model...[/cyan]")
+    model_wrapper = ModelWrapper(config)
+    start_epoch = 0
 
-    best_score = 0.0
-    best_epoch = 0
-    best_model = None
-
-    # Early stopping tracking
-    degradation_count = 0
-    last_score = 0.0
-    min_trades_for_best = 50  # Require at least 50 trades to be considered "best"
-
-    def calculate_composite_score(win_rate, total_return, sharpe, trades):
-        """
-        Composite score optimizing for: high probability + high profitability
-        - win_rate: probability of success
-        - total_return: absolute profitability
-        - sharpe: risk-adjusted returns (consistency)
-        - trades: statistical confidence
-
-        Formula: WR * Return * sqrt(Sharpe) * log(1 + trades/100)
-        This rewards models that are profitable, consistent, and statistically significant.
-        """
-        import math
-        if sharpe < 0:
-            sharpe = 0.01  # Avoid negative sharpe killing score
-
-        trade_confidence = math.log(1 + trades / 100.0)  # Logarithmic to avoid over-weighting
-        sharpe_factor = math.sqrt(max(sharpe, 0.01))  # Square root to moderate impact
-
-        return win_rate * total_return * sharpe_factor * trade_confidence
-
-    # CREATE ONE MLBacktest OBJECT - reuse it to leverage caching
-    console.print("[yellow]Creating backtester (data will be cached after first epoch)[/yellow]\n")
-    bt = MLBacktest(
-        model_type='xgboost',
-        retrain=True,
-        signal_threshold=config.exit.signal_threshold  # Use config threshold
-    )
-    bt.sl_atr_mult = config.exit.stop_loss_atr_mult
-    bt.tp_atr_mult = config.exit.take_profit_atr_mult
-
-    for epoch in range(1, args.epochs + 1):
-        current_estimators = min(estimators_per_epoch * epoch, args.n_estimators)
-
-        # Stop if we've reached max estimators (no point repeating same config)
-        if epoch > 1 and current_estimators == args.n_estimators:
-            prev_estimators = min(estimators_per_epoch * (epoch - 1), args.n_estimators)
-            if prev_estimators == current_estimators:
-                console.print(f"\n[yellow]Stopping at epoch {epoch-1}: reached n_estimators={args.n_estimators}[/yellow]")
-                break
-
-        console.print(f"\n[bold yellow]Epoch {epoch}/{args.epochs}[/bold yellow] - Training with {current_estimators} trees")
-
-        epoch_start = datetime.now()
-
-        # Update config for this epoch
-        config.ml.n_estimators = current_estimators
-
-        # Reuse same bt object - pooled data will be cached after first epoch
-        results = bt.run(start_date=start_date, end_date=end_date, train_window=train_window)
-        epoch_time = (datetime.now() - epoch_start).total_seconds()
-
-        if results and 'win_rate' in results:
-            avg_win = abs(results.get('avg_win', 0))
-            avg_loss = abs(results.get('avg_loss', 1))
-            wl_ratio = avg_win / avg_loss if avg_loss > 0 else 0
-            win_rate = results.get('win_rate', 0) / 100.0
-            total_trades = results.get('total_trades', 0)
-            total_return = results.get('total_return', 0)
-            sharpe = results.get('sharpe_ratio', 0)
-
-            # Calculate composite score (profit × probability × consistency)
-            current_score = calculate_composite_score(win_rate, total_return, sharpe, total_trades)
-
-            # Check if best (require minimum trades to avoid lucky flukes)
-            status = ""
-            if total_trades >= min_trades_for_best and current_score > best_score:
-                best_score = current_score
-                best_epoch = epoch
-                best_model = bt.global_xgb
-                status = "[bold green]NEW BEST[/bold green]"
-                degradation_count = 0  # Reset degradation counter
-            elif current_score >= best_score * 0.95:  # Within 5%
-                status = "[green]~[/green]"
-            else:
-                status = "[dim]-[/dim]"
-
-            # Track score degradation for early stopping
-            if total_trades >= min_trades_for_best:
-                if current_score < last_score:
-                    degradation_count += 1
-                else:
-                    degradation_count = 0
-                last_score = current_score
-
-            # Add to table
-            results_table.add_row(
-                str(epoch),
-                str(current_estimators),
-                f"{win_rate:.1%}",
-                f"{wl_ratio:.2f}x",
-                str(total_trades),
-                f"{total_return:.1f}%",  # total_return already multiplied by 100 in eval.py
-                f"{sharpe:.2f}",
-                status
-            )
-
-            # Save epoch model
-            if bt.global_xgb is not None:
-                epoch_model_path = f"{session_dir}/epoch_{epoch}.pkl"
-                bt.global_xgb.save(epoch_model_path)
-            else:
-                epoch_model_path = None
-
-            # Save epoch data
-            epoch_data = {
-                "epoch": epoch,
-                "n_estimators": current_estimators,
-                "duration_seconds": epoch_time,
-                "model_path": epoch_model_path,
-                "metrics": {
-                    "win_rate": float(win_rate),
-                    "wl_ratio": float(wl_ratio),
-                    "total_return": float(total_return),
-                    "sharpe_ratio": float(sharpe),
-                    "total_trades": int(total_trades),
-                    "avg_win": float(avg_win),
-                    "avg_loss": float(avg_loss),
-                    "composite_score": float(current_score)
-                },
-                "is_best": bool(current_score == best_score)
-            }
-            session_data["epochs"].append(epoch_data)
-
-            # Live progress display
-            console.print(results_table)
-
-            # Early stopping: if performance degrades for 3 consecutive epochs, stop
-            if degradation_count >= 3:
-                console.print(f"\n[yellow]Early stopping: Performance degraded for {degradation_count} consecutive epochs[/yellow]")
-                console.print(f"[yellow]Overfitting detected - stopping at epoch {epoch}[/yellow]")
-                break
-
+    # Resume logic (either from --retrain or --resume flag)
+    if checkpoint_path:
+        logger.log(f"[yellow]Loading checkpoint from {checkpoint_path}...[/yellow]")
+        start_epoch, prev_metrics = model_wrapper.load_checkpoint(checkpoint_path)
+        if start_epoch is not None:
+            logger.log(f"[bold yellow]✓ Resuming from epoch {start_epoch}[/bold yellow]")
+            start_epoch += 1 # Continue from next epoch
         else:
-            console.print("[red]Epoch failed[/red]")
-
-    # Training complete
-    console.print(f"\n[bold green]Training Complete![/bold green]")
-    if best_epoch > 0:
-        best_epoch_data = session_data["epochs"][best_epoch - 1]
-        best_metrics = best_epoch_data['metrics']
-        console.print(f"Best model: Epoch {best_epoch} with {best_epoch_data['n_estimators']} trees")
-        console.print(f"  Win Rate: {best_metrics['win_rate']:.1%}")
-        console.print(f"  Return: {best_metrics['total_return']:.1f}%")
-        console.print(f"  Sharpe: {best_metrics['sharpe_ratio']:.2f}")
-        console.print(f"  Trades: {best_metrics['total_trades']}")
-        console.print(f"  [dim]Composite Score: {best_metrics['composite_score']:.2f}[/dim]\n")
+            logger.log(f"[bold red]Failed to load checkpoint, starting fresh[/bold red]")
+            start_epoch = 0
     else:
-        console.print(f"[yellow]No valid best model (all epochs had < {min_trades_for_best} trades)[/yellow]\n")
+        logger.log(f"[green]Starting fresh training (no checkpoint loaded)[/green]")
 
-    # Save best model
-    if best_model and best_epoch > 0:
-        console.print(f"[bold cyan]Saving Champion Model (Epoch {best_epoch})[/bold cyan]")
+    logger.log(f"[green]✓ Model ready on device: {model_wrapper.device}[/green]")
 
-        # Save to session folder
-        session_best_path = f"{session_dir}/best_model.pkl"
-        best_model.save(session_best_path)
-        console.print(f"  Session: {session_best_path}")
+    # 3. Training Loop
+    logger.log(f"[bold cyan]Starting training for {args.epochs} epochs...[/bold cyan]")
+    dashboard = TrainingDashboard(args.epochs, session_id)
+    
+    progress = Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        TaskProgressColumn(),
+        TimeElapsedColumn(),
+        TimeRemainingColumn()
+    )
+    
+    # Live Display
+    with Live(dashboard.get_layout(start_epoch, 0, 0, 0), refresh_per_second=4, console=console) as live:
 
-        # Copy to production location (for morning_signals.py, etc.)
-        production_path = "models/global_xgb_champion.pkl"
-        best_model.save(production_path)
-        console.print(f"  Production: {production_path}")
+        patience = 10
+        patience_counter = 0
+        best_val_loss = float('inf')
 
-        # Get best epoch data (already retrieved above)
-        best_epoch_data = session_data["epochs"][best_epoch - 1]
+        for epoch in range(start_epoch, args.epochs):
+            # Progress callback for batch-level updates
+            current_train_loss = [0.0]  # Mutable container for closure
+            current_train_acc = [0.0]
 
-        # Save metadata
-        metadata = {
-            'xgboost': {
-                'win_rate': float(best_epoch_data['metrics']['win_rate']),
-                'wl_ratio': float(best_epoch_data['metrics']['wl_ratio']),
-                'total_trades': int(best_epoch_data['metrics']['total_trades']),
-                'total_return': float(best_epoch_data['metrics']['total_return']),
-                'sharpe_ratio': float(best_epoch_data['metrics']['sharpe_ratio']),
-                'sl_atr_mult': float(config.exit.stop_loss_atr_mult),
-                'tp_atr_mult': float(config.exit.take_profit_atr_mult),
-                'signal_threshold': float(config.exit.signal_threshold),
-                'date': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-                'feature_count': feature_count,
-                'max_depth': args.max_depth,
-                'n_estimators': best_epoch_data['n_estimators'],
-                'best_epoch': best_epoch,
-                'session_id': session_id
-            }
-        }
+            def batch_progress(batch_num, total_batches, loss, acc):
+                current_train_loss[0] = loss
+                current_train_acc[0] = acc
+                batch_info = {'current': batch_num, 'total': total_batches}
+                live.update(dashboard.get_layout(
+                    epoch+1, loss, 0, 0,
+                    f"Training... (Batch {batch_num}/{total_batches})",
+                    batch_info=batch_info
+                ))
 
-        # Save to session folder
-        session_metadata_path = f"{session_dir}/metadata.json"
-        with open(session_metadata_path, 'w') as f:
-            json.dump(metadata, f, indent=4)
+            # Train Epoch with live batch progress
+            train_loss, train_acc = model_wrapper.train_one_epoch(train_loader, progress_callback=batch_progress)
 
-        # Save to production location (for morning_signals.py, etc.)
-        production_metadata_path = 'models/champion_metadata.json'
-        with open(production_metadata_path, 'w') as f:
-            json.dump(metadata, f, indent=4)
+            # Validation progress callback
+            def val_progress(batch_num, total_batches, loss, acc):
+                batch_info = {'current': batch_num, 'total': total_batches}
+                live.update(dashboard.get_layout(
+                    epoch+1, train_loss, loss, acc,
+                    f"Validating... (Batch {batch_num}/{total_batches})",
+                    batch_info=batch_info
+                ))
 
-        console.print(f"  Metadata: {session_metadata_path}")
-        console.print(f"  Production Metadata: {production_metadata_path}")
+            # Evaluate with live batch progress
+            val_loss, val_acc = model_wrapper.evaluate(val_loader, progress_callback=val_progress)
 
-    # Save session
-    session_data["end_time"] = datetime.now().isoformat()
-    session_data["best_epoch"] = best_epoch
+            # Update Dashboard with final epoch metrics
+            live.update(dashboard.get_layout(epoch+1, train_loss, val_loss, val_acc, "Saving checkpoint..."))
 
-    with open(session_file, 'w') as f:
-        json.dump(session_data, f, indent=2)
+            # Checkpoint
+            is_best = val_loss < best_val_loss
+            if is_best:
+                best_val_loss = val_loss
+                patience_counter = 0
+                model_wrapper.save_checkpoint(f"{session_dir}/best.pt", epoch, {"val_loss": val_loss, "val_acc": val_acc})
+                # Also verify/copy to global best for inference
+                model_wrapper.save_checkpoint("models/best_lstm.pt", epoch, {"val_loss": val_loss, "val_acc": val_acc})
+            else:
+                patience_counter += 1
 
-    console.print(f"\n[bold cyan]Session saved to: {session_dir}/[/bold cyan]")
-    console.print(f"[dim]  - session.json (training log)[/dim]")
-    console.print(f"[dim]  - epoch_1.pkl, epoch_2.pkl, ... (models from each epoch)[/dim]")
-    console.print(f"[dim]  - best_model.pkl (champion model)[/dim]")
-    console.print(f"[dim]  - metadata.json (performance metrics)[/dim]")
+            if patience_counter >= patience:
+                live.update(dashboard.get_layout(epoch+1, train_loss, val_loss, val_acc, "Early Stopping"))
+                break
+
+            model_wrapper.save_checkpoint(f"{session_dir}/last.pt", epoch, {"val_loss": val_loss, "val_acc": val_acc})
+
+    console.print("")  # Blank line for spacing
+    logger.log(f"[bold green]✓ Training Complete![/bold green]")
+    logger.log(f"[green]Best Val Loss:[/green] {best_val_loss:.4f}")
+    logger.log(f"[green]Session saved to:[/green] {session_dir}")
 
 if __name__ == "__main__":
     main()

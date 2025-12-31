@@ -206,19 +206,19 @@ class Screener:
     def _check_criteria(self, df: pd.DataFrame, ticker: str) -> bool:
         """
         Check if a single stock meets screening criteria.
-
+        
         Criteria:
-        1. Liquidity: Average volume > threshold
-        2. Trend: Price > EMA 200 (Long term uptrend)
-        3. Momentum: RSI > 50 (Positive momentum)
-        4. Volatility: ATR > 1% of price (Enough movement to trade)
+        1. Price > Threshold (Penny stock filter)
+        2. Liquidity (Volume & Value)
+        3. Circuit Breaker (Avoid locked stocks)
         """
-        if df.empty or len(df) < 200:
+        if df.empty or len(df) < 20:
             return False
             
         try:
             # Get latest data
             latest = df.iloc[-1]
+            prev = df.iloc[-2] if len(df) > 1 else latest
             
             # 1. Price check
             if latest['close'] < self.min_price:
@@ -230,47 +230,18 @@ class Screener:
                 return False
                 
             # b. Average Volume (20-day)
-            avg_vol = df['volume'].rolling(20).mean().iloc[-1]
+            avg_vol = df['volume'].tail(20).mean()
             if avg_vol < self.min_volume:
                 return False
 
-            # 3. Trend Check (Price > EMA 200 is visually powerful)
-            ema200 = df['close'].ewm(span=200).mean().iloc[-1]
-            if latest['close'] < ema200:
+            # c. Minimum Transaction Value Check (e.g. 1B IDR per day)
+            # Tier 1 needs more, but basic screen should enforce some liquidity
+            avg_val = (df['close'] * df['volume']).tail(20).mean()
+            if avg_val < 100_000_000: # 100 Million IDR minimum
                 return False
-                
-            # 4. Momentum Check (RSI > 50)
-            # Calculate simple RSI if not present
-            if 'rsi' not in df.columns:
-                delta = df['close'].diff()
-                gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
-                loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
-                rs = gain / loss
-                rsi = 100 - (100 / (1 + rs))
-                current_rsi = rsi.iloc[-1]
-            else:
-                current_rsi = latest['rsi']
-                
-            if current_rsi < 50:
-                return False
-                
-            # 5. Volatility Potential (ATR > 1% of price)
-            # We want stocks that move, not dead ones
-            if 'atr' not in df.columns:
-                high_low = df['high'] - df['low']
-                high_close = pd.Series(np.abs(df['high'] - df['close'].shift()), index=df.index)
-                low_close = pd.Series(np.abs(df['low'] - df['close'].shift()), index=df.index)
-                tr = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
-                atr = tr.rolling(14).mean().iloc[-1]
-            else:
-                atr = latest['atr']
-                
-            atr_pct = (atr / latest['close']) * 100
-            if atr_pct < 1.0: # Minimum 1% daily range
-                return False
-                
-            # 6. Circuit Breaker Check (ARA/ARB)
-            if not self._check_circuit_breaker(latest['close'], df['close'].shift(1).iloc[-1]):
+
+            # 3. Circuit Breaker Check (Safe to trade?)
+            if not self._check_circuit_breaker(latest['close'], prev['close']):
                 return False
 
             return True

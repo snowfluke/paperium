@@ -12,6 +12,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from data.fetcher import DataFetcher
 from data.storage import DataStorage
 from config import config
+from utils.logger import TimedLogger
 
 console = Console()
 logging.basicConfig(level=logging.INFO)
@@ -25,6 +26,8 @@ def download_ihsg_data(days: int = 1825):  # 5 years default
     Args:
         days: Number of days of historical data to fetch
     """
+    timed_logger = TimedLogger()
+    timed_logger.log("Starting IHSG data download")
     console.print("[bold cyan]Downloading IHSG Index Data (^JKSE)[/bold cyan]")
 
     # Create fetcher for IHSG
@@ -32,16 +35,20 @@ def download_ihsg_data(days: int = 1825):  # 5 years default
     storage = DataStorage(config.data.db_path)
 
     console.print(f"Fetching {days} days of IHSG history...")
+    timed_logger.log(f"Fetching {days} days of IHSG data")
 
     # Fetch data
     data = fetcher.fetch_batch(days=days)
 
     if not data.empty:
+        timed_logger.log(f"Data fetched: {len(data)} records")
         console.print(f"Downloaded {len(data)} records for IHSG")
         console.print(f"Date range: {data['date'].min()} to {data['date'].max()}")
 
         # Store in database
+        timed_logger.log("Saving to database")
         count = storage.upsert_prices(data)
+        timed_logger.log("IHSG download complete")
         console.print(f"[bold green]✓ IHSG data saved. {count} records updated.[/bold green]")
 
         # Show summary statistics

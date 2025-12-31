@@ -15,44 +15,51 @@ console = Console()
 def clear_screen():
     os.system('cls' if os.name == 'nt' else 'clear')
 
+def run_script(script_path, *args):
+    """Helper to run scripts with uv."""
+    cmd = ["uv", "run", "python", script_path]
+    cmd.extend(args)
+    console.print(f"\n[yellow]Executing: {' '.join(cmd)}[/yellow]\n")
+    subprocess.run(cmd)
+
 def main_menu():
     clear_screen()
     console.print(Panel.fit(
         "[bold cyan]Paperium Trading System[/bold cyan]\n"
-        "[dim]XGBoost Intelligence[/dim]",
+        "[dim]LSTM + Triple Barrier Labeling Algorithm[/dim]",
         border_style="cyan"
     ))
     
-    console.print("\n[bold yellow]Main Menu:[/bold yellow]")
-    console.print("0. [bold yellow]Initial Setup & Data Prep[/bold yellow] (Mandatory)")
-    console.print("1. [bold green]Morning Ritual[/bold green] (Generate Signals)")
-    console.print("2. [bold magenta]Evening Update[/bold magenta] (EOD Retrain & Evaluation)")
-    console.print("3. [bold cyan]Model Training[/bold cyan] (Customizable)")
-    console.print("4. [bold blue]Evaluation[/bold blue] (Backtest)")
-    console.print("5. [bold white]Stock Analysis[/bold white] (Single Ticker Deep Dive)")
-    console.print("6. [bold yellow]Training Sessions[/bold yellow] (View Progress)")
+    console.print("\n[bold]Main Menu:[/bold]")
+    console.print("0. Initial Setup & Data Prep (Mandatory)")
+    console.print("1. IDX Stock Prediction (Generate Signals)")
+    console.print("2. Model Training (LSTM)")
+    console.print("3. Evaluation (Backtest)")
+    console.print("4. Hyperparameter Tuning (Optimize LSTM)")
     console.print("X. Exit")
 
-    choice = Prompt.ask("\nSelect action", choices=["1", "2", "3", "4", "5", "6", "0", "X", "x"], default="1")
+    choice = Prompt.ask("\nSelect action", choices=["0", "1", "2", "3", "4", "5", "X", "x"], default="1")
     
-    if choice == "1":
-        custom_capital = IntPrompt.ask("Extra Money / Free Capital to allocate (IDR)", default=0)
-        cmd = ["uv", "run", "python", "scripts/morning_signals.py"]
-        if custom_capital > 0:
-            cmd.extend(["--custom-capital", str(custom_capital)])
-        subprocess.run(cmd)
-    elif choice == "2":
-        subprocess.run(["uv", "run", "python", "scripts/eod_retrain.py"])
-    elif choice == "3":
-        train_menu()
-    elif choice == "4":
-        eval_menu()
-    elif choice == "5":
-        analyze_menu()
-    elif choice == "6":
-        view_training_menu()
-    elif choice == "0":
+    if choice == "0":
         setup_menu()
+    elif choice == "1":
+        fetch_latest = Confirm.ask("Fetch latest data from Yahoo Finance?", default=False)
+        custom_capital = IntPrompt.ask("Capital to allocate (IDR, 0=show all signals)", default=0)
+        num_stock = IntPrompt.ask("Number of stocks to trade (0=show all)", default=0)
+        cmd = ["scripts/signals.py"]
+        if fetch_latest:
+            cmd.append("--fetch-latest")
+        if custom_capital > 0:
+            cmd.extend(["--capital", str(custom_capital)])
+        if num_stock > 0:
+            cmd.extend(["--num-stock", str(num_stock)])
+        run_script(*cmd)
+    elif choice == "2":
+        train_menu() # Now interactive/rich
+    elif choice == "3":
+        eval_menu()
+    elif choice == "4":
+        tune_menu()
     elif choice.upper() == "X":
         console.print("[dim]Goodbye![/dim]")
         sys.exit(0)
@@ -66,14 +73,12 @@ def setup_menu():
     
     console.print("\n[dim]Prepare your environment and sync market data[/dim]\n")
     console.print("1. [bold cyan]Clean Universe[/bold cyan] (Filter illiquid/suspended stocks)")
-    console.print("2. [bold magenta]Sync Stock Data[/bold magenta] (Fetch historical data - training uses 3 years)")
-    console.print("3. [bold green]Download IHSG Index[/bold green] (For crash detection)")
-    console.print("4. [bold yellow]Analyze Hour-0 Patterns[/bold yellow] (Optional - not used by universal model)")
-    console.print("5. [bold red]Clear Cache[/bold red] (Delete .cache folder)")
+    console.print("2. [bold magenta]Sync Stock Data[/bold magenta] (Fetch historical data)")
+    console.print("3. [bold green]Download IHSG Index[/bold green] (For market context)")
+    console.print("4. [bold red]Clear Cache[/bold red] (Delete .cache folder)")
     console.print("B. Back to Main Menu")
 
-
-    choice = Prompt.ask("\nSelect setup action", choices=["1", "2", "3", "4", "5", "B", "b"], default="1")
+    choice = Prompt.ask("\nSelect setup action", choices=["1", "2", "3", "4", "B", "b"], default="1")
 
     if choice == "1":
         console.print("\n[yellow]Running: uv run python scripts/clean_universe.py[/yellow]\n")
@@ -86,21 +91,6 @@ def setup_menu():
         console.print(f"\n[yellow]Running: uv run python scripts/download_ihsg.py --days {days}[/yellow]\n")
         subprocess.run(["uv", "run", "python", "scripts/download_ihsg.py", "--days", str(days)])
     elif choice == "4":
-        from rich.prompt import Confirm
-        use_all = Confirm.ask("Analyze all tickers from universe?", default=True)
-
-        if use_all:
-            days = IntPrompt.ask("Days of hourly data to fetch (max 60)", default=60)
-            console.print(f"\n[yellow]Running: uv run python scripts/analyze_hour0.py --days {days}[/yellow]\n")
-            console.print("[dim]⏱ This will fetch hourly data with rate limiting (all stocks = ~5 minutes)[/dim]\n")
-            subprocess.run(["uv", "run", "python", "scripts/analyze_hour0.py", "--days", str(days)])
-        else:
-            stocks = IntPrompt.ask("Number of stocks to analyze", default=200)
-            days = IntPrompt.ask("Days of hourly data to fetch (max 60)", default=60)
-            console.print(f"\n[yellow]Running: uv run python scripts/analyze_hour0.py --stocks {stocks} --days {days}[/yellow]\n")
-            console.print(f"[dim]⏱ This will fetch hourly data with rate limiting ({stocks} stocks = ~{stocks // 10 * 3 // 60} minutes)[/dim]\n")
-            subprocess.run(["uv", "run", "python", "scripts/analyze_hour0.py", "--stocks", str(stocks), "--days", str(days)])
-    elif choice == "5":
         import shutil
         if os.path.exists(".cache"):
             from rich.prompt import Confirm
@@ -115,73 +105,48 @@ def setup_menu():
     elif choice.upper() == "B":
         return
 
-def analyze_menu():
+def tune_menu():
     clear_screen()
-    console.print(Panel.fit("[bold cyan]Single Stock Analysis[/bold cyan]", border_style="cyan"))
+    console.print(Panel.fit("[bold yellow]Hyperparameter Tuning[/bold yellow]", border_style="yellow"))
+    console.print("\n[dim]Optimize LSTM architecture (Hidden Size, Layers, Dropout)[/dim]\n")
     
-    console.print("\n[dim]Comprehensive analysis of a single stock[/dim]\n")
-    
-    ticker = Prompt.ask("Enter ticker (e.g., BBCA)")
-    portfolio = IntPrompt.ask("Portfolio value (IDR)", default=100_000_000)
-    
-    cmd = ["uv", "run", "python", "scripts/analyze.py", ticker, "--portfolio", str(portfolio)]
-    
-    console.print(f"\n[yellow]Executing: {' '.join(cmd)}[/yellow]\n")
-    subprocess.run(cmd)
-
-def view_training_menu():
-    clear_screen()
-    console.print(Panel.fit("[bold yellow]Training Session Viewer[/bold yellow]", border_style="yellow"))
-
-    console.print("\n[dim]View training session progression in terminal[/dim]\n")
-
-    cmd = ["uv", "run", "python", "scripts/view_training.py"]
-
-    console.print(f"[yellow]Launching session viewer...[/yellow]\n")
+    cmd = ["uv", "run", "python", "scripts/tune_lstm.py"]
+    console.print(f"[yellow]Launching tuner...[/yellow]\n")
     subprocess.run(cmd)
 
 def train_menu():
     clear_screen()
-    console.print(Panel.fit("[bold cyan]Model Training Lab[/bold cyan]", border_style="cyan"))
+    console.print(Panel.fit("[bold cyan]LSTM Model Training[/bold cyan]", border_style="cyan"))
 
     # Customizable parameters
     console.print("\n[dim]Configure training parameters:[/dim]\n")
 
-    # Show current champion info
-    try:
-        import json
-        with open('models/champion_metadata.json', 'r') as f:
-            try:
-                metadata = json.load(f)
-            except (json.JSONDecodeError, ValueError):
-                metadata = {}
-        current_wr = metadata.get('xgboost', {}).get('win_rate', 0)
-        current_wl = metadata.get('xgboost', {}).get('wl_ratio', 0)
-        current_trades = metadata.get('xgboost', {}).get('total_trades', 0)
-        current_sharpe = metadata.get('xgboost', {}).get('sharpe_ratio', 0)
-        console.print(f"[cyan]Current Champion:[/cyan] WR={current_wr:.1%}, W/L={current_wl:.2f}x, Trades={current_trades}, Sharpe={current_sharpe:.2f}\n")
-    except:
-        pass
+    # Check if existing model exists
+    model_exists = os.path.exists("models/best_lstm.pt")
 
-    days = Prompt.ask("Evaluation days (number or 'max')", default="max")
-    train_window = Prompt.ask("Training window (number or 'max')", default="max")
-    max_depth = IntPrompt.ask("XGBoost max depth", default=5)
-    n_estimators = IntPrompt.ask("XGBoost n_estimators (final trees)", default=50)
-    epochs = IntPrompt.ask("Training epochs", default=5)
+    if model_exists:
+        console.print("[yellow]⚠ Existing model detected:[/yellow] models/best_lstm.pt\n")
+        training_mode = Prompt.ask(
+            "Training mode",
+            choices=["fresh", "retrain"],
+            default="retrain"
+        )
+        console.print()
 
-    use_gpu = Confirm.ask("\nUse GPU acceleration?", default=False)
+        if training_mode == "fresh":
+            console.print("[bold yellow]Fresh Training:[/bold yellow] Starting new model from scratch")
+        else:
+            console.print("[bold cyan]Retrain Mode:[/bold cyan] Continuing from existing model")
+    else:
+        console.print("[dim]No existing model found - will start fresh training[/dim]\n")
+        training_mode = "fresh"
 
-    console.print(f"\n[dim]Training will progressively improve from {n_estimators // epochs} to {n_estimators} trees over {epochs} epochs[/dim]")
+    epochs = IntPrompt.ask("Training epochs", default=50)
 
-    cmd = ["uv", "run", "python", "scripts/train.py",
-           "--days", days,
-           "--train-window", train_window,
-           "--max-depth", str(max_depth),
-           "--n-estimators", str(n_estimators),
-           "--epochs", str(epochs)]
+    cmd = ["uv", "run", "python", "scripts/train.py", "--epochs", str(epochs)]
 
-    if use_gpu:
-        cmd.append("--gpu")
+    if training_mode == "retrain":
+        cmd.append("--retrain")
 
     console.print(f"\n[yellow]Executing: {' '.join(cmd)}[/yellow]\n")
     subprocess.run(cmd)
@@ -195,16 +160,10 @@ def eval_menu():
     
     start_date = Prompt.ask("Start date (YYYY-MM-DD)", default="2024-01-01")
     end_date = Prompt.ask("End date (YYYY-MM-DD)", default="2025-09-30")
-    window = IntPrompt.ask("Training window (trading days)", default=252)
-    retrain = Confirm.ask("Retrain model before evaluation?", default=False)
     
     cmd = ["uv", "run", "python", "scripts/eval.py", 
            "--start", start_date, 
-           "--end", end_date,
-           "--window", str(window)]
-    
-    if retrain:
-        cmd.append("--retrain")
+           "--end", end_date]
     
     console.print(f"\n[yellow]Executing: {' '.join(cmd)}[/yellow]\n")
     subprocess.run(cmd)

@@ -306,8 +306,11 @@ class XGBoostInference:
             # Limit order: moderate confidence (0.55-0.85)
             if confidence >= 0.85:
                 order_type = "MARKET"
+                entry_pct = 0.0  # Enter at market price
             else:
                 order_type = "LIMIT"
+                # Limit order: enter 1x ATR below current (conservative entry)
+                entry_pct = atr_pct * 1.0
 
             return {
                 'confidence': confidence,
@@ -318,7 +321,8 @@ class XGBoostInference:
                 'tp_mult': tp_mult,
                 'trail_mult': trail_mult,
                 'atr_pct': atr_pct,
-                'order_type': order_type
+                'order_type': order_type,
+                'entry_pct': entry_pct
             }
 
         except Exception as e:

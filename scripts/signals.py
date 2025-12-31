@@ -175,20 +175,25 @@ def main():
                     # Combine scores (average)
                     combined_score = (lstm_prob + xgb_conf) / 2.0
 
-                    # Use XGBoost's dynamic SL/TP
-                    sl_price = price * (1 - xgb_result['sl_pct'])
-                    tp_price = price * (1 + xgb_result['tp_pct'])
-                    trail_price = price * (1 - xgb_result['trail_pct'])
+                    # Calculate entry price (for limit orders)
+                    entry_price = price * (1 - xgb_result['entry_pct'])
+
+                    # Use XGBoost's dynamic SL/TP (from entry price)
+                    sl_price = entry_price * (1 - xgb_result['sl_pct'])
+                    tp_price = entry_price * (1 + xgb_result['tp_pct'])
+                    trail_price = entry_price * (1 - xgb_result['trail_pct'])
 
                     signals.append({
                         'Ticker': ticker,
                         'Price': price,
+                        'Entry': entry_price,
                         'LSTM_Conf': lstm_prob,
                         'XGB_Conf': xgb_conf,
                         'Conf': combined_score,
                         'SL': sl_price,
                         'TP': tp_price,
                         'Trail': trail_price,
+                        'Entry_pct': xgb_result['entry_pct'],
                         'SL_pct': xgb_result['sl_pct'],
                         'TP_pct': xgb_result['tp_pct'],
                         'Trail_pct': xgb_result['trail_pct'],
@@ -196,16 +201,18 @@ def main():
                         'ATR_pct': xgb_result['atr_pct']
                     })
                 else:
-                    # LSTM only - use default 3% barriers
+                    # LSTM only - use default 3% barriers, market order
                     signals.append({
                         'Ticker': ticker,
                         'Price': price,
+                        'Entry': price,  # Market order - enter at current price
                         'LSTM_Conf': lstm_prob,
                         'XGB_Conf': None,
                         'Conf': lstm_prob,
                         'SL': price * (1 - config.ml.tbl_barrier),
                         'TP': price * (1 + config.ml.tbl_barrier),
                         'Trail': None,
+                        'Entry_pct': 0.0,
                         'SL_pct': config.ml.tbl_barrier,
                         'TP_pct': config.ml.tbl_barrier,
                         'Trail_pct': None,
@@ -241,9 +248,9 @@ def main():
             weight = signal['Conf'] / total_confidence
             allocation = args.capital * weight
 
-            # Calculate shares (round to lots of 100)
-            shares = int(allocation / signal['Price'] / 100) * 100
-            actual_allocation = shares * signal['Price']
+            # Calculate shares (round to lots of 100) using ENTRY price
+            shares = int(allocation / signal['Entry'] / 100) * 100
+            actual_allocation = shares * signal['Entry']
 
             # Estimated P/L based on dynamic SL/TP (if ensemble) or TBL barriers
             if use_ensemble:
@@ -269,21 +276,25 @@ def main():
     table.add_column("#", justify="right", style="dim")
     table.add_column("Ticker", style="cyan")
     table.add_column("Price", justify="right")
+    table.add_column("Entry", justify="right", style="bold green")
 
     if use_ensemble:
         table.add_column("LSTM", justify="right", style="cyan")
         table.add_column("XGB", justify="right", style="blue")
         table.add_column("Combined", justify="right", style="magenta")
         table.add_column("Order", justify="center", style="yellow")
-        table.add_column("SL/TP/Trail", justify="center", style="dim")
+        table.add_column("SL", justify="right", style="red")
+        table.add_column("TP", justify="right", style="green")
+        table.add_column("Trail", justify="right", style="yellow")
     else:
         table.add_column("Conf", justify="right", style="magenta")
-        table.add_column("SL/TP", justify="center", style="dim")
+        table.add_column("SL", justify="right", style="red")
+        table.add_column("TP", justify="right", style="green")
 
     if has_allocation:
-        table.add_column("Shares", justify="right")
         table.add_column("Allocation", justify="right", style="yellow")
-        table.add_column("Est P/L", justify="right", style="green")
+        table.add_column("Est Profit", justify="right", style="green")
+        table.add_column("Est Loss", justify="right", style="red")
 
     for i, signal in enumerate(display_signals, 1):
         is_allocated = has_allocation and i <= args.num_stock
@@ -291,6 +302,9 @@ def main():
 
         # Price formatting
         price_str = f"Rp {signal['Price']:,.0f}"
+        entry_str = f"Rp {signal['Entry']:,.0f}"
+        if signal['Entry_pct'] > 0:
+            entry_str += f" (-{signal['Entry_pct']*100:.1f}%)"
 
         if use_ensemble:
             # Ensemble mode - show both scores
@@ -299,41 +313,45 @@ def main():
             combined_str = f"{signal['Conf']:.1%}"
             order_str = signal['OrderType']
 
-            # Dynamic SL/TP/Trail with percentages
-            sl_tp_trail_str = (
-                f"{signal['SL']:.0f} ({signal['SL_pct']*100:.1f}%) / "
-                f"{signal['TP']:.0f} ({signal['TP_pct']*100:.1f}%) / "
-                f"{signal['Trail']:.0f} ({signal['Trail_pct']*100:.1f}%)"
-            )
+            # Individual SL/TP/Trail columns with percentages
+            sl_str = f"{signal['SL']:.0f} ({signal['SL_pct']*100:.1f}%)"
+            tp_str = f"{signal['TP']:.0f} ({signal['TP_pct']*100:.1f}%)"
+            trail_str = f"{signal['Trail']:.0f} ({signal['Trail_pct']*100:.1f}%)"
 
             if has_allocation and is_allocated:
-                shares_str = f"{signal['Shares']:,}"
                 alloc_str = f"Rp {signal['Allocation']:,.0f}"
-                pl_str = f"+Rp {signal['Est_Profit']:,.0f} / -Rp {signal['Est_Loss']:,.0f}"
+                profit_str = f"+Rp {signal['Est_Profit']:,.0f}"
+                loss_str = f"-Rp {signal['Est_Loss']:,.0f}"
 
                 table.add_row(
                     f"[{rank_style}]{i}[/{rank_style}]",
                     f"[{rank_style}]{signal['Ticker']}[/{rank_style}]",
                     price_str,
+                    entry_str,
                     lstm_str,
                     xgb_str,
                     combined_str,
                     order_str,
-                    sl_tp_trail_str,
-                    shares_str,
+                    sl_str,
+                    tp_str,
+                    trail_str,
                     alloc_str,
-                    pl_str
+                    profit_str,
+                    loss_str
                 )
             elif has_allocation:
                 table.add_row(
                     f"[{rank_style}]{i}[/{rank_style}]",
                     f"[{rank_style}]{signal['Ticker']}[/{rank_style}]",
                     price_str,
+                    entry_str,
                     lstm_str,
                     xgb_str,
                     combined_str,
                     order_str,
-                    sl_tp_trail_str,
+                    sl_str,
+                    tp_str,
+                    trail_str,
                     "-", "-", "-"
                 )
             else:
@@ -341,39 +359,47 @@ def main():
                     f"{i}",
                     signal['Ticker'],
                     price_str,
+                    entry_str,
                     lstm_str,
                     xgb_str,
                     combined_str,
                     order_str,
-                    sl_tp_trail_str
+                    sl_str,
+                    tp_str,
+                    trail_str
                 )
         else:
             # LSTM only mode
             conf_str = f"{signal['Conf']:.1%}"
-            sl_tp_str = f"{signal['SL']:.0f} / {signal['TP']:.0f}"
+            sl_str = f"{signal['SL']:.0f}"
+            tp_str = f"{signal['TP']:.0f}"
 
             if has_allocation and is_allocated:
-                shares_str = f"{signal['Shares']:,}"
                 alloc_str = f"Rp {signal['Allocation']:,.0f}"
-                pl_str = f"+Rp {signal['Est_Profit']:,.0f} / -Rp {signal['Est_Loss']:,.0f}"
+                profit_str = f"+Rp {signal['Est_Profit']:,.0f}"
+                loss_str = f"-Rp {signal['Est_Loss']:,.0f}"
 
                 table.add_row(
                     f"[{rank_style}]{i}[/{rank_style}]",
                     f"[{rank_style}]{signal['Ticker']}[/{rank_style}]",
                     price_str,
+                    entry_str,
                     conf_str,
-                    sl_tp_str,
-                    shares_str,
+                    sl_str,
+                    tp_str,
                     alloc_str,
-                    pl_str
+                    profit_str,
+                    loss_str
                 )
             elif has_allocation:
                 table.add_row(
                     f"[{rank_style}]{i}[/{rank_style}]",
                     f"[{rank_style}]{signal['Ticker']}[/{rank_style}]",
                     price_str,
+                    entry_str,
                     conf_str,
-                    sl_tp_str,
+                    sl_str,
+                    tp_str,
                     "-", "-", "-"
                 )
             else:
@@ -381,8 +407,10 @@ def main():
                     f"{i}",
                     signal['Ticker'],
                     price_str,
+                    entry_str,
                     conf_str,
-                    sl_tp_str
+                    sl_str,
+                    tp_str
                 )
 
     console.print("\n")
@@ -398,8 +426,8 @@ def main():
         console.print(f"  Total Capital:      Rp {args.capital:,.0f}")
         console.print(f"  Actually Allocated: Rp {total_allocated:,.0f} ({total_allocated/args.capital*100:.1f}%)")
         console.print(f"  Stocks to Buy:      {len(signals_to_allocate)}")
-        console.print(f"  Est. Profit (3%):   [green]+Rp {total_est_profit:,.0f} (+{total_est_profit/1e6:.2f}M)[/green]")
-        console.print(f"  Est. Loss (3%):     [red]-Rp {total_est_loss:,.0f} (-{total_est_loss/1e6:.2f}M)[/red]")
+        console.print(f"  Est. Profit:        [green]+Rp {total_est_profit:,.0f} (+{total_est_profit/1e6:.2f}M)[/green]")
+        console.print(f"  Est. Loss:          [red]-Rp {total_est_loss:,.0f} (-{total_est_loss/1e6:.2f}M)[/red]")
 
     logger.log(f"[green]✓ Analysis complete[/green]")
 

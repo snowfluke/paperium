@@ -208,6 +208,7 @@ class EnsembleBacktest:
                     'sl_pct': xgb_result['sl_pct'],
                     'tp_pct': xgb_result['tp_pct'],
                     'trail_pct': xgb_result['trail_pct'],
+                    'entry_pct': xgb_result['entry_pct'],
                     'order_type': xgb_result['order_type']
                 })
 
@@ -220,31 +221,34 @@ class EnsembleBacktest:
 
     def open_position(self, signal, entry_date):
         """Open a new position."""
-        # Calculate position size
+        # Calculate entry price (limit order: below current price)
+        entry_price = signal['price'] * (1 - signal['entry_pct'])
+
+        # Calculate position size using entry price
         available_capital = self.capital - sum(p['entry_price'] * p['shares'] for p in self.positions)
         position_value = available_capital * self.position_size_pct
 
-        shares = int(position_value / signal['price'] / 100) * 100
+        shares = int(position_value / entry_price / 100) * 100
         if shares == 0:
             return False
 
-        actual_value = shares * signal['price']
+        actual_value = shares * entry_price
 
-        # Calculate SL/TP/Trail prices
-        sl_price = signal['price'] * (1 - signal['sl_pct'])
-        tp_price = signal['price'] * (1 + signal['tp_pct'])
-        trail_price = signal['price'] * (1 - signal['trail_pct'])
+        # Calculate SL/TP/Trail prices from entry price
+        sl_price = entry_price * (1 - signal['sl_pct'])
+        tp_price = entry_price * (1 + signal['tp_pct'])
+        trail_price = entry_price * (1 - signal['trail_pct'])
 
         position = {
             'ticker': signal['ticker'],
             'entry_date': entry_date,
-            'entry_price': signal['price'],
+            'entry_price': entry_price,
             'shares': shares,
             'sl_price': sl_price,
             'tp_price': tp_price,
             'trail_price': trail_price,
             'current_trail': trail_price,
-            'highest_price': signal['price'],
+            'highest_price': entry_price,
             'lstm_conf': signal['lstm_conf'],
             'xgb_conf': signal['xgb_conf'],
             'combined_score': signal['combined_score'],

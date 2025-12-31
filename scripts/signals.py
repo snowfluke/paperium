@@ -18,6 +18,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from config import config
 from ml.model import ModelWrapper
 from ml.features import FeatureEngineer
+from ml.xgb_inference import XGBoostInference
 from utils.logger import TimedLogger
 from data.blacklist import BLACKLIST_UNIVERSE
 
@@ -74,11 +75,24 @@ def main():
             console.print(f"[red]Warning: Failed to fetch latest data: {e}[/red]")
             console.print("[yellow]Continuing with existing database data...[/yellow]")
 
-    console.print(Panel.fit(
-        "[bold cyan]IDX Stock Predictions (LSTM)[/bold cyan]\n"
-        "[dim]Generating buy signals with ML confidence[/dim]",
-        border_style="cyan"
-    ))
+    # Try loading XGBoost model
+    xgb_model = XGBoostInference()
+    use_ensemble = xgb_model.load_model()
+
+    if use_ensemble:
+        console.print(Panel.fit(
+            "[bold magenta]IDX Stock Predictions (Ensemble Mode)[/bold magenta]\n"
+            "[dim]LSTM + XGBoost with dynamic SL/TP[/dim]",
+            border_style="magenta"
+        ))
+    else:
+        console.print(Panel.fit(
+            "[bold cyan]IDX Stock Predictions (LSTM)[/bold cyan]\n"
+            "[dim]Generating buy signals with ML confidence[/dim]",
+            border_style="cyan"
+        ))
+        console.print("\n[yellow]Note: XGBoost model not found. Using LSTM only with 3% barriers.[/yellow]")
+        console.print("[dim]To train XGBoost model, switch to 'paperium-v1' branch and run training.[/dim]")
 
     # Display configuration
     console.print("\n[bold]Configuration:[/bold]")
@@ -131,28 +145,72 @@ def main():
                 if len(df) < config.data.window_size:
                     continue
 
-                # Prepare inference sequence
+                # LSTM Prediction
                 X_tensor = feature_eng.prepare_inference(df)
-
-                # Predict
                 pred_class, probs = model.predict(X_tensor)
                 pred_class = pred_class[0]
                 probs = probs[0]
+                lstm_prob = probs[2]  # Class 2 is Profit
 
-                # Class 2 is Profit
-                buy_prob = probs[2]
+                # LSTM threshold: Class 2 AND Prob > 50%
+                if pred_class != 2 or lstm_prob <= 0.5:
+                    continue
 
-                # Thresholds: Class 2 AND Prob > 50%
-                if pred_class == 2 and buy_prob > 0.5:
-                    latest = df.iloc[-1]
-                    price = latest['close']
+                latest = df.iloc[-1]
+                price = latest['close']
+
+                # XGBoost Prediction (if available)
+                if use_ensemble:
+                    xgb_result = xgb_model.predict(df)
+                    if xgb_result is None:
+                        continue
+
+                    xgb_conf = xgb_result['confidence']
+                    xgb_threshold = xgb_model.get_threshold()
+
+                    # XGBoost filter
+                    if xgb_conf < xgb_threshold:
+                        continue
+
+                    # Combine scores (average)
+                    combined_score = (lstm_prob + xgb_conf) / 2.0
+
+                    # Use XGBoost's dynamic SL/TP
+                    sl_price = price * (1 - xgb_result['sl_pct'])
+                    tp_price = price * (1 + xgb_result['tp_pct'])
+                    trail_price = price * (1 - xgb_result['trail_pct'])
 
                     signals.append({
                         'Ticker': ticker,
                         'Price': price,
-                        'Conf': buy_prob,
+                        'LSTM_Conf': lstm_prob,
+                        'XGB_Conf': xgb_conf,
+                        'Conf': combined_score,
+                        'SL': sl_price,
+                        'TP': tp_price,
+                        'Trail': trail_price,
+                        'SL_pct': xgb_result['sl_pct'],
+                        'TP_pct': xgb_result['tp_pct'],
+                        'Trail_pct': xgb_result['trail_pct'],
+                        'OrderType': xgb_result['order_type'],
+                        'ATR_pct': xgb_result['atr_pct']
+                    })
+                else:
+                    # LSTM only - use default 3% barriers
+                    signals.append({
+                        'Ticker': ticker,
+                        'Price': price,
+                        'LSTM_Conf': lstm_prob,
+                        'XGB_Conf': None,
+                        'Conf': lstm_prob,
                         'SL': price * (1 - config.ml.tbl_barrier),
-                        'TP': price * (1 + config.ml.tbl_barrier)
+                        'TP': price * (1 + config.ml.tbl_barrier),
+                        'Trail': None,
+                        'SL_pct': config.ml.tbl_barrier,
+                        'TP_pct': config.ml.tbl_barrier,
+                        'Trail_pct': None,
+                        'OrderType': 'MARKET',
+                        'ATR_pct': None
                     })
 
             except Exception:
@@ -187,9 +245,13 @@ def main():
             shares = int(allocation / signal['Price'] / 100) * 100
             actual_allocation = shares * signal['Price']
 
-            # Estimated P/L based on TBL barriers
-            estimated_profit = actual_allocation * config.ml.tbl_barrier  # +3%
-            estimated_loss = actual_allocation * config.ml.tbl_barrier    # -3%
+            # Estimated P/L based on dynamic SL/TP (if ensemble) or TBL barriers
+            if use_ensemble:
+                estimated_profit = actual_allocation * signal['TP_pct']
+                estimated_loss = actual_allocation * signal['SL_pct']
+            else:
+                estimated_profit = actual_allocation * config.ml.tbl_barrier
+                estimated_loss = actual_allocation * config.ml.tbl_barrier
 
             signal['Allocation'] = actual_allocation
             signal['Shares'] = shares
@@ -207,8 +269,16 @@ def main():
     table.add_column("#", justify="right", style="dim")
     table.add_column("Ticker", style="cyan")
     table.add_column("Price", justify="right")
-    table.add_column("Conf", justify="right", style="magenta")
-    table.add_column("SL/TP", justify="center", style="dim")
+
+    if use_ensemble:
+        table.add_column("LSTM", justify="right", style="cyan")
+        table.add_column("XGB", justify="right", style="blue")
+        table.add_column("Combined", justify="right", style="magenta")
+        table.add_column("Order", justify="center", style="yellow")
+        table.add_column("SL/TP/Trail", justify="center", style="dim")
+    else:
+        table.add_column("Conf", justify="right", style="magenta")
+        table.add_column("SL/TP", justify="center", style="dim")
 
     if has_allocation:
         table.add_column("Shares", justify="right")
@@ -222,40 +292,89 @@ def main():
         # Price formatting
         price_str = f"Rp {signal['Price']:,.0f}"
 
-        # SL/TP
-        sl_tp_str = f"{signal['SL']:.0f} / {signal['TP']:.0f}"
+        if use_ensemble:
+            # Ensemble mode - show both scores
+            lstm_str = f"{signal['LSTM_Conf']:.1%}"
+            xgb_str = f"{signal['XGB_Conf']:.1%}"
+            combined_str = f"{signal['Conf']:.1%}"
+            order_str = signal['OrderType']
 
-        # Confidence
-        conf_str = f"{signal['Conf']:.1%}"
-
-        if has_allocation and is_allocated:
-            # Show allocation details
-            shares_str = f"{signal['Shares']:,}"
-            alloc_str = f"Rp {signal['Allocation']:,.0f}"
-            pl_str = f"+{signal['Est_Profit']/1e6:.2f}M / -{signal['Est_Loss']/1e6:.2f}M"
-
-            table.add_row(
-                f"[{rank_style}]{i}[/{rank_style}]",
-                f"[{rank_style}]{signal['Ticker']}[/{rank_style}]",
-                price_str,
-                conf_str,
-                sl_tp_str,
-                shares_str,
-                alloc_str,
-                pl_str
+            # Dynamic SL/TP/Trail with percentages
+            sl_tp_trail_str = (
+                f"{signal['SL']:.0f} ({signal['SL_pct']*100:.1f}%) / "
+                f"{signal['TP']:.0f} ({signal['TP_pct']*100:.1f}%) / "
+                f"{signal['Trail']:.0f} ({signal['Trail_pct']*100:.1f}%)"
             )
+
+            if has_allocation and is_allocated:
+                shares_str = f"{signal['Shares']:,}"
+                alloc_str = f"Rp {signal['Allocation']:,.0f}"
+                pl_str = f"+Rp {signal['Est_Profit']:,.0f} / -Rp {signal['Est_Loss']:,.0f}"
+
+                table.add_row(
+                    f"[{rank_style}]{i}[/{rank_style}]",
+                    f"[{rank_style}]{signal['Ticker']}[/{rank_style}]",
+                    price_str,
+                    lstm_str,
+                    xgb_str,
+                    combined_str,
+                    order_str,
+                    sl_tp_trail_str,
+                    shares_str,
+                    alloc_str,
+                    pl_str
+                )
+            elif has_allocation:
+                table.add_row(
+                    f"[{rank_style}]{i}[/{rank_style}]",
+                    f"[{rank_style}]{signal['Ticker']}[/{rank_style}]",
+                    price_str,
+                    lstm_str,
+                    xgb_str,
+                    combined_str,
+                    order_str,
+                    sl_tp_trail_str,
+                    "-", "-", "-"
+                )
+            else:
+                table.add_row(
+                    f"{i}",
+                    signal['Ticker'],
+                    price_str,
+                    lstm_str,
+                    xgb_str,
+                    combined_str,
+                    order_str,
+                    sl_tp_trail_str
+                )
         else:
-            # Watchlist or no allocation mode
-            if has_allocation:
+            # LSTM only mode
+            conf_str = f"{signal['Conf']:.1%}"
+            sl_tp_str = f"{signal['SL']:.0f} / {signal['TP']:.0f}"
+
+            if has_allocation and is_allocated:
+                shares_str = f"{signal['Shares']:,}"
+                alloc_str = f"Rp {signal['Allocation']:,.0f}"
+                pl_str = f"+Rp {signal['Est_Profit']:,.0f} / -Rp {signal['Est_Loss']:,.0f}"
+
                 table.add_row(
                     f"[{rank_style}]{i}[/{rank_style}]",
                     f"[{rank_style}]{signal['Ticker']}[/{rank_style}]",
                     price_str,
                     conf_str,
                     sl_tp_str,
-                    "-",
-                    "-",
-                    "-"
+                    shares_str,
+                    alloc_str,
+                    pl_str
+                )
+            elif has_allocation:
+                table.add_row(
+                    f"[{rank_style}]{i}[/{rank_style}]",
+                    f"[{rank_style}]{signal['Ticker']}[/{rank_style}]",
+                    price_str,
+                    conf_str,
+                    sl_tp_str,
+                    "-", "-", "-"
                 )
             else:
                 table.add_row(

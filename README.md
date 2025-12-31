@@ -16,6 +16,12 @@ Paper: https://arxiv.org/pdf/2504.02249v1
 > [!IMPORTANT]  
 > Paperium V0 and Paperium V1 still available in the branch section with differnt model architecture
 
+## Paperium Ensemble
+
+Go train the paperium v1 xgboost model on `paperium-v1` branch and combine it with paperium v2 to get more accurate signaling with entry and dynamic SL/TP, instead of fixed 3%.
+
+![Paperium Ensemble](images/ensemble.png)
+
 ## Table of Contents
 
 1. [Core Philosophy](#core-philosophy)
@@ -715,7 +721,8 @@ Shows both total elapsed time and step duration.
 - **Reinforcement learning** - Adaptive position sizing
 - **Volatility regime detection** - Adjust barriers by market conditions
 - **Transaction cost modeling** - Include brokerage fees
-- 
+-
+
 ## Performance Notes
 
 ### Optimal Hyperparameters

@@ -34,8 +34,9 @@ def main_menu():
     console.print("0. Initial Setup & Data Prep (Mandatory)")
     console.print("1. IDX Stock Prediction (Generate Signals)")
     console.print("2. Model Training (LSTM)")
-    console.print("3. Evaluation (Backtest)")
-    console.print("4. Hyperparameter Tuning (Optimize LSTM)")
+    console.print("3. Evaluation (LSTM Backtest)")
+    console.print("4. Ensemble Backtest (LSTM + XGBoost)")
+    console.print("5. Hyperparameter Tuning (Optimize LSTM)")
     console.print("X. Exit")
 
     choice = Prompt.ask("\nSelect action", choices=["0", "1", "2", "3", "4", "5", "X", "x"], default="1")
@@ -55,10 +56,12 @@ def main_menu():
             cmd.extend(["--num-stock", str(num_stock)])
         run_script(*cmd)
     elif choice == "2":
-        train_menu() # Now interactive/rich
+        train_menu()
     elif choice == "3":
         eval_menu()
     elif choice == "4":
+        ensemble_eval_menu()
+    elif choice == "5":
         tune_menu()
     elif choice.upper() == "X":
         console.print("[dim]Goodbye![/dim]")
@@ -154,17 +157,46 @@ def train_menu():
 
 def eval_menu():
     clear_screen()
-    console.print(Panel.fit("[bold cyan]Evaluation Lab[/bold cyan]", border_style="cyan"))
-    
+    console.print(Panel.fit("[bold cyan]Evaluation Lab (LSTM)[/bold cyan]", border_style="cyan"))
+
     console.print("\n[dim]Configure evaluation parameters:[/dim]\n")
-    
+
     start_date = Prompt.ask("Start date (YYYY-MM-DD)", default="2024-01-01")
     end_date = Prompt.ask("End date (YYYY-MM-DD)", default="2025-09-30")
-    
-    cmd = ["uv", "run", "python", "scripts/eval.py", 
-           "--start", start_date, 
+
+    cmd = ["uv", "run", "python", "scripts/eval.py",
+           "--start", start_date,
            "--end", end_date]
-    
+
+    console.print(f"\n[yellow]Executing: {' '.join(cmd)}[/yellow]\n")
+    subprocess.run(cmd)
+
+def ensemble_eval_menu():
+    clear_screen()
+    console.print(Panel.fit("[bold magenta]Ensemble Backtest (LSTM + XGBoost)[/bold magenta]", border_style="magenta"))
+
+    console.print("\n[dim]Test combined LSTM + XGBoost predictions with dynamic SL/TP[/dim]\n")
+
+    # Check if XGBoost model exists
+    if not os.path.exists("models/global_xgb_champion.pkl") and not os.path.exists("models/global_xgb_champion.json"):
+        console.print("[yellow]Warning: XGBoost model not found[/yellow]")
+        console.print("[dim]To train XGBoost model:[/dim]")
+        console.print("  1. git checkout paperium-v1")
+        console.print("  2. uv run python scripts/train.py --days max --train-window max")
+        console.print("  3. git checkout main")
+        console.print("")
+
+        proceed = Confirm.ask("Continue anyway? (will fail)", default=False)
+        if not proceed:
+            return
+
+    start_date = Prompt.ask("Start date (YYYY-MM-DD)", default="2024-01-01")
+    end_date = Prompt.ask("End date (YYYY-MM-DD)", default="2025-09-30")
+
+    cmd = ["uv", "run", "python", "scripts/eval_ensemble.py",
+           "--start", start_date,
+           "--end", end_date]
+
     console.print(f"\n[yellow]Executing: {' '.join(cmd)}[/yellow]\n")
     subprocess.run(cmd)
 

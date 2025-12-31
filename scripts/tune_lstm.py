@@ -75,8 +75,8 @@ def train_evaluate_config(X_train, y_train, X_val, y_val, params: Dict, device, 
     
     best_val_loss = float('inf')
     early_stop_cnt = 0
-    patience = 5
-    epochs = 15 # Short epochs for tuning
+    patience = 10  # Increased from 5
+    epochs = 30  # Increased from 15 for better convergence
     
     # Nested Progress Task for Epochs
     epoch_task = None
@@ -155,9 +155,9 @@ def main():
     logger.log("Loading data")
     console.print("[yellow]Loading Sample Data...[/yellow]")
     df = load_data(config.data.db_path)
-    # Filter 30% of tickers for tuning speed
+    # Use more tickers for better representation
     tickers = df['ticker'].unique()
-    sample_tickers = np.random.choice(tickers, size=int(len(tickers)*0.2), replace=False)
+    sample_tickers = np.random.choice(tickers, size=int(len(tickers)*0.5), replace=False)  # Increased from 0.2
     df = df[df['ticker'].isin(sample_tickers)].copy()
     console.print(f"Using {len(sample_tickers)} tickers for tuning.")
     logger.log(f"Generating sequences for {len(sample_tickers)} tickers")
@@ -185,12 +185,14 @@ def main():
     X_train, X_val, y_train, y_val = train_test_split(X_combined, y_combined, test_size=0.2, random_state=42)
     logger.log(f"Sequences ready: {len(X_train):,} train, {len(X_val):,} val")
 
-    # 3. Parameter Grid
+    # 3. Parameter Grid - Based on paper: hidden=8 was optimal, but test larger for IHSG
     grid = [
         {'hidden_size': 8, 'num_layers': 2, 'dropout': 0.0, 'lr': 0.001, 'batch_size': 256},
         {'hidden_size': 16, 'num_layers': 2, 'dropout': 0.0, 'lr': 0.001, 'batch_size': 256},
         {'hidden_size': 32, 'num_layers': 2, 'dropout': 0.2, 'lr': 0.001, 'batch_size': 256},
-        {'hidden_size': 8, 'num_layers': 4, 'dropout': 0.2, 'lr': 0.001, 'batch_size': 256},
+        {'hidden_size': 64, 'num_layers': 2, 'dropout': 0.2, 'lr': 0.001, 'batch_size': 256},
+        {'hidden_size': 32, 'num_layers': 3, 'dropout': 0.2, 'lr': 0.001, 'batch_size': 256},
+        {'hidden_size': 16, 'num_layers': 4, 'dropout': 0.3, 'lr': 0.001, 'batch_size': 256},
     ]
 
     logger.log(f"Testing {len(grid)} hyperparameter configurations")

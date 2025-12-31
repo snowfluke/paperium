@@ -106,6 +106,8 @@ def main():
     else:
         console.print(f"  Number of Stocks:    Not specified (show all signals)")
 
+    console.print(f"  Max Hold Days:       {config.ml.tbl_horizon} days (time stop)")
+
     # 2. Load Model
     logger.log("[cyan]Loading LSTM model...[/cyan]")
     try:

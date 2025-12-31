@@ -349,15 +349,16 @@ class EnsembleBacktest:
             TextColumn("[progress.description]{task.description}"),
             BarColumn(),
             TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
-            TimeRemainingColumn(),
+            TextColumn("[cyan]{task.fields[positions_info]}"),
             console=console
         ) as progress:
-            task = progress.add_task("[cyan]Backtesting...", total=len(trading_dates))
+            task = progress.add_task(
+                "[cyan]Backtesting...",
+                total=len(trading_dates),
+                positions_info="Positions: 0 | Trades: 0"
+            )
 
             for i, current_date in enumerate(trading_dates):
-                # Update progress with current date
-                progress.update(task, description=f"[cyan]Processing {current_date} ({i+1}/{len(trading_dates)})")
-
                 # Update existing positions
                 self.update_positions(current_date)
 
@@ -369,7 +370,13 @@ class EnsembleBacktest:
                     for signal in signals[:self.max_positions - len(self.positions)]:
                         self.open_position(signal, current_date)
 
-                progress.advance(task)
+                # Update progress with stats
+                progress.update(
+                    task,
+                    description=f"[cyan]{current_date}",
+                    positions_info=f"Positions: {len(self.positions)} | Trades: {len(self.closed_trades)}",
+                    advance=1
+                )
 
         # Close any remaining positions at final price
         for pos in self.positions[:]:

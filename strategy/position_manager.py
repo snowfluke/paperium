@@ -54,6 +54,8 @@ class Position:
     exit_reason: Optional[str] = None
     pnl: Optional[float] = None
     pnl_pct: Optional[float] = None
+    id: Optional[int] = None  # Database ID
+    updated_at: Optional[str] = None
     
     def to_dict(self) -> dict:
         return asdict(self)

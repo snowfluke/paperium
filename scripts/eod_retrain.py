@@ -16,6 +16,7 @@ import pandas as pd
 import numpy as np
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+import json
 import logging
 from datetime import datetime, date
 from typing import Dict, List
@@ -54,10 +55,6 @@ class EODRetraining:
         self.storage = DataStorage(config.data.db_path)
         self.fetcher = DataFetcher(config.data.stock_universe)
         self.signal_combiner = SignalCombiner(config)
-        
-        from scripts.auto_train import AutoTrainer
-        self.trainer = AutoTrainer() # Reuse metadata logic
-        
         self.position_manager = PositionManager()
     
     def run(self):
@@ -232,12 +229,21 @@ class EODRetraining:
             
             acc_challenger = metrics.get('cv_accuracy', 0)
             
-            if acc_challenger > 0.60: 
+            if acc_challenger > 0.60:
                 console.print(f"  [green]✓ XGBOOST passed validation ({acc_challenger:.1%})[/green]")
                 challenger.save(os.path.join('models', 'global_xgb_champion.pkl'))
                 self.metrics_summary['xgboost'] = {'status': 'UPDATED', 'accuracy': acc_challenger}
             else:
-                current_best = self.trainer.champion_metadata['xgboost']['win_rate']
+                # Load current champion accuracy from metadata
+                current_best = acc_challenger
+                metadata_path = 'models/champion_metadata.json'
+                if os.path.exists(metadata_path):
+                    try:
+                        with open(metadata_path, 'r') as f:
+                            metadata = json.load(f)
+                            current_best = metadata.get('xgboost', {}).get('win_rate', acc_challenger)
+                    except:
+                        pass
                 console.print(f"  [red]✕ XGBOOST failed validation ({acc_challenger:.1%})[/red]")
                 self.metrics_summary['xgboost'] = {'status': 'KEPT_OLD', 'accuracy': current_best}
             

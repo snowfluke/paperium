@@ -21,13 +21,14 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import logging
 import pandas as pd
 import numpy as np
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 from typing import Dict, List, Tuple, Optional
 from rich.console import Console
 from rich.table import Table
 from rich.panel import Panel
 from rich import box
 from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TaskProgressColumn
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from config import config
 from data.fetcher import DataFetcher, get_sector_mapping
@@ -71,6 +72,30 @@ class MorningSignals:
         self.position_manager = PositionManager()
         self.sector_mapping = get_sector_mapping()
         self.metadata = self._load_metadata()
+
+    def _cleanup_old_caches(self, cache_dir: Path, current_hour: str):
+        """Remove cache files older than current hour."""
+        try:
+            # Clean up signals cache files (format: signals_YYYYMMDD_HH_hash.pkl)
+            for cache_file in cache_dir.glob("signals_*.pkl"):
+                parts = cache_file.stem.split('_')
+                if len(parts) >= 3:
+                    file_hour = f"{parts[1]}_{parts[2]}"  # YYYYMMDD_HH
+                    if file_hour < current_hour:
+                        cache_file.unlink()
+                        logger.debug(f"Cleaned up old cache: {cache_file.name}")
+
+            # Clean up fetch cache files (format: fetch_DATE_DATE_YYYYMMDD_HH_hash.pkl)
+            for cache_file in cache_dir.glob("fetch_*.pkl"):
+                parts = cache_file.stem.split('_')
+                if len(parts) >= 5:
+                    # Extract YYYYMMDD_HH (parts[3] and parts[4])
+                    file_hour = f"{parts[3]}_{parts[4]}"  # YYYYMMDD_HH
+                    if file_hour < current_hour:
+                        cache_file.unlink()
+                        logger.debug(f"Cleaned up old cache: {cache_file.name}")
+        except Exception as e:
+            logger.warning(f"Cache cleanup failed: {e}")
 
     def _load_metadata(self) -> Dict:
         """Load model metadata from JSON."""
@@ -244,11 +269,16 @@ class MorningSignals:
         ticker_list_str = "_".join(sorted(unique_tickers))
         ticker_hash = hashlib.md5(ticker_list_str.encode()).hexdigest()[:8]
         now = datetime.now()
-        cache_key = f"signals_{now.strftime('%Y%m%d_%H')}_{ticker_hash}.pkl"
+        current_hour = now.strftime('%Y%m%d_%H')
+        cache_key = f"signals_{current_hour}_{ticker_hash}.pkl"
         cache_path = cache_dir / cache_key
+
+        # Cleanup old caches
+        self._cleanup_old_caches(cache_dir, current_hour)
 
         passed_tickers = []
         data_by_ticker = {}
+        ml_predictions = {}
         cached_found = False
 
         if cache_path.exists():
@@ -257,6 +287,7 @@ class MorningSignals:
                     cache_data = pickle.load(f)
                     passed_tickers = cache_data.get('passed_tickers', [])
                     data_by_ticker = cache_data.get('data_by_ticker', {})
+                    ml_predictions = cache_data.get('ml_predictions', {})
                     cached_found = True
                 console.print(f"  [green]✓ Using cached signals for this hour ({cache_path.name})[/green]")
             except Exception as e:
@@ -271,7 +302,7 @@ class MorningSignals:
         ) as progress:
 
             if not cached_found:
-                # Phase 0: Screening
+                # Phase 0: Screening (PARALLEL)
                 console.print(f"  [cyan]Running High-Potential Screener...[/cyan]")
 
                 # Group data once for efficiency
@@ -279,57 +310,95 @@ class MorningSignals:
 
                 screen_task = progress.add_task("Screening candidates...", total=len(unique_tickers))
 
-                for ticker in unique_tickers:
+                def screen_ticker(ticker):
+                    """Screen a single ticker."""
                     try:
                         df = all_grouped.get_group(ticker)
                         if self.screener._check_criteria(df, ticker):
-                            passed_tickers.append(ticker)
+                            return ticker
                     except KeyError:
                         pass
-                    progress.advance(screen_task)
+                    return None
+
+                # Parallel screening with ThreadPoolExecutor
+                with ThreadPoolExecutor(max_workers=4) as executor:
+                    futures = {executor.submit(screen_ticker, ticker): ticker for ticker in unique_tickers}
+                    for future in as_completed(futures):
+                        result = future.result()
+                        if result:
+                            passed_tickers.append(result)
+                        progress.advance(screen_task)
 
                 console.print(f"  [green]✓ {len(passed_tickers)} stocks passed screening out of {len(unique_tickers)}[/green]")
 
                 if not passed_tickers:
                     return []
 
-                # Phase 1: Technical signals
+                # Phase 1: Technical signals (PARALLEL)
                 sig_task = progress.add_task("Calculating technical signals...", total=len(passed_tickers))
-                for ticker in passed_tickers:
-                    ticker_data = all_grouped.get_group(ticker)
 
-                    if len(ticker_data) >= config.data.min_data_points:
-                        try:
+                def calculate_signals(ticker):
+                    """Calculate technical signals for a single ticker."""
+                    try:
+                        ticker_data = all_grouped.get_group(ticker)
+                        if len(ticker_data) >= config.data.min_data_points:
                             signals = self.signal_combiner.calculate_signals(ticker_data)
-                            data_by_ticker[ticker] = signals
-                        except Exception as e:
-                            logger.warning(f"Signal calculation failed for {ticker}: {e}")
-                    progress.advance(sig_task)
+                            return (ticker, signals)
+                    except Exception as e:
+                        logger.warning(f"Signal calculation failed for {ticker}: {e}")
+                    return None
 
-                # Save to cache
-                try:
-                    with open(cache_path, 'wb') as f:
-                        pickle.dump({
-                            'passed_tickers': passed_tickers,
-                            'data_by_ticker': data_by_ticker
-                        }, f)
-                except Exception as e:
-                    logger.warning(f"Failed to save signal cache: {e}")
+                # Parallel signal calculation
+                with ThreadPoolExecutor(max_workers=4) as executor:
+                    futures = {executor.submit(calculate_signals, ticker): ticker for ticker in passed_tickers}
+                    for future in as_completed(futures):
+                        result = future.result()
+                        if result:
+                            ticker, signals = result
+                            data_by_ticker[ticker] = signals
+                        progress.advance(sig_task)
 
             if not passed_tickers:
                 return []
 
-            # Phase 2: ML predictions (XGBoost only)
+            # Phase 2: ML predictions (XGBoost only) - PARALLEL & CACHED
             if self.model.model is not None:
-                ml_task = progress.add_task("Generating XGBOOST predictions...", total=len(data_by_ticker))
-                ml_predictions = {}
-                for ticker, ticker_df in data_by_ticker.items():
-                    try:
-                        _, prob = self.model.predict_latest(ticker_df)
-                        ml_predictions[ticker] = pd.Series([prob], index=[ticker_df.index[-1]])
-                    except Exception as e:
-                        logger.debug(f"XGBoost prediction failed for {ticker}: {e}")
-                    progress.advance(ml_task)
+                # Only run predictions if not cached
+                if not ml_predictions:
+                    ml_task = progress.add_task("Generating XGBOOST predictions...", total=len(data_by_ticker))
+
+                    def predict_ticker(ticker_and_df):
+                        """Predict for a single ticker."""
+                        ticker, ticker_df = ticker_and_df
+                        try:
+                            _, prob = self.model.predict_latest(ticker_df)
+                            return (ticker, pd.Series([prob], index=[ticker_df.index[-1]]))
+                        except Exception as e:
+                            logger.debug(f"XGBoost prediction failed for {ticker}: {e}")
+                        return None
+
+                    # Parallel ML predictions
+                    with ThreadPoolExecutor(max_workers=4) as executor:
+                        futures = {executor.submit(predict_ticker, item): item[0]
+                                   for item in data_by_ticker.items()}
+                        for future in as_completed(futures):
+                            result = future.result()
+                            if result:
+                                ticker, prediction = result
+                                ml_predictions[ticker] = prediction
+                            progress.advance(ml_task)
+
+                    # Save to cache (including ML predictions)
+                    if not cached_found:
+                        try:
+                            with open(cache_path, 'wb') as f:
+                                pickle.dump({
+                                    'passed_tickers': passed_tickers,
+                                    'data_by_ticker': data_by_ticker,
+                                    'ml_predictions': ml_predictions
+                                }, f)
+                        except Exception as e:
+                            logger.warning(f"Failed to save signal cache: {e}")
 
                 # Rank and process
                 rankings = self.signal_combiner.rank_stocks(data_by_ticker, ml_predictions)
@@ -358,17 +427,13 @@ class MorningSignals:
 
         top_candidates = buy_signals.sort_values('composite_score', ascending=False).head(10)
 
-        # Debug: Print top candidates for confirmation
-        if not top_candidates.empty:
-            console.print("\n[dim]Top Candidates by Model Strength (Raw):[/dim]")
-            for _, row in top_candidates.iterrows():
-                conf_pct = row['composite_score'] * 100
-                console.print(f"  [dim]{row['ticker']}: {conf_pct:.1f}%[/dim]")
-
         # Phase 3: Final signal generation with sizing
         new_signals = []
         max_total_positions = 15
         max_new_positions = max_total_positions - len(existing_positions)
+
+        # Get list of tickers with existing positions to avoid duplicates
+        existing_tickers = set(existing_positions.keys())
 
         # Sector limits (still applied during sizing, but not selection)
         sector_count = {}
@@ -379,6 +444,12 @@ class MorningSignals:
                 break
 
             ticker = row['ticker']
+
+            # Skip if ticker already has an open position
+            if ticker in existing_tickers:
+                logger.debug(f"Skipping {ticker} - already has open position")
+                continue
+
             sector = self.sector_mapping.get(ticker, 'Other')
 
             # Determine order type based on signal strength
@@ -510,6 +581,7 @@ class MorningSignals:
 
         console.print(Panel(summary_text, border_style="dim", padding=(0, 2)))
         console.print("[dim]⚠️  Execute based on pre-market opening conditions. Check for major gap-ups/downs.[/dim]")
+        console.print("[dim]📅 Maximum hold period: 5 trading days. Close positions automatically at day 5 or when TP/SL is hit.[/dim]")
         console.print()
 
     def _print_signal_table(self, signals: List[Dict], custom_capital: float = 0.0):
@@ -538,6 +610,11 @@ class MorningSignals:
 
             mode_icon = "🔥 [bold red]SNIPER[/bold red]" if sig.get('strategy_mode') == 'EXPLOSIVE' else "[dim]⚖️ BASE[/dim]"
 
+            # Calculate percentages relative to entry/limit price
+            reference_price = sig['limit_price'] if sig['limit_price'] else sig['entry_price']
+            sl_pct = ((sig['stop_loss'] - reference_price) / reference_price) * 100
+            tp_pct = ((sig['take_profit'] - reference_price) / reference_price) * 100
+
             row_data = [
                 str(i),
                 sig['ticker'].replace('.JK', ''),
@@ -546,8 +623,8 @@ class MorningSignals:
                 f"{conf_pct:.1f}%",
                 f"Rp {sig['entry_price']:,.0f}",
                 f"Rp {sig['limit_price']:,.0f}" if sig['limit_price'] else "-",
-                f"{sig['stop_loss']:,.0f}",
-                f"{sig['take_profit']:,.0f}",
+                f"{sig['stop_loss']:,.0f} ({sl_pct:+.1f}%)",
+                f"{sig['take_profit']:,.0f} (+{tp_pct:.1f}%)",
                 f"Rp {sig['position_value']:,.0f}"
             ]
 

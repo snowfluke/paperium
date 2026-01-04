@@ -100,43 +100,72 @@ class EODRetraining:
         """Evaluate all open positions against today's price action."""
         positions = self.position_manager.get_open_positions()
         all_data = self.storage.get_prices()
-        
+
         results = {
             'hit_tp': [],
             'hit_sl': [],
+            'max_hold_closed': [],
             'floating_profit': [],
             'floating_loss': [],
             'filled': [],
             'unchanged': []
         }
-        
+
         if not positions:
             console.print("  No open positions to evaluate")
             return results
-        
+
+        today = date.today()
+
         for pos in positions:
             ticker = pos.ticker
             ticker_data = all_data[all_data['ticker'] == ticker]
-            
+
             if ticker_data.empty:
                 continue
-            
+
             latest = ticker_data.iloc[-1]
             current_price = latest['close']
             high = latest['high']
             low = latest['low']
-            
-            # Update position status
+
+            # Check max hold period (5 trading days from filled_date)
+            # Only check for positions that have been filled (not PENDING)
+            if pos.status in ('OPEN', 'FLOATING_PROFIT', 'FLOATING_LOSS') and pos.filled_date:
+                filled_date = datetime.strptime(pos.filled_date, '%Y-%m-%d').date()
+                days_held = (today - filled_date).days
+
+                if days_held >= 5:
+                    # Close position due to max hold period
+                    entry = pos.filled_price or pos.entry_price
+                    result = self.position_manager.close_position(
+                        ticker, current_price, "MAX_HOLD_PERIOD"
+                    )
+
+                    if result:
+                        result_entry = {
+                            'ticker': ticker,
+                            'entry': entry,
+                            'current': current_price,
+                            'pnl_pct': result['pnl_pct'],
+                            'days_held': days_held,
+                            'stop_loss': pos.stop_loss,
+                            'take_profit': pos.take_profit
+                        }
+                        results['max_hold_closed'].append(result_entry)
+                        continue  # Skip normal update since we just closed it
+
+            # Update position status (check TP/SL hits)
             update = self.position_manager.update_position_status(
                 ticker, current_price, high, low
             )
-            
+
             if not update:
                 continue
-            
+
             entry = pos.filled_price or pos.entry_price
             pnl_pct = (current_price - entry) / entry * 100
-            
+
             result_entry = {
                 'ticker': ticker,
                 'entry': entry,
@@ -145,7 +174,7 @@ class EODRetraining:
                 'stop_loss': pos.stop_loss,
                 'take_profit': pos.take_profit
             }
-            
+
             if update.get('exit'):
                 if update['reason'] == 'HIT_TAKE_PROFIT':
                     results['hit_tp'].append(result_entry)
@@ -159,7 +188,7 @@ class EODRetraining:
                 results['floating_loss'].append(result_entry)
             else:
                 results['unchanged'].append(result_entry)
-        
+
         return results
     
     def _expire_unfilled_orders(self) -> int:
@@ -256,14 +285,15 @@ class EODRetraining:
         console.print("\n" + "=" * 60)
         console.print("[bold]END-OF-DAY SUMMARY[/bold]")
         console.print("=" * 60)
-        
+
         # Position outcomes
         hit_tp = results.get('hit_tp', [])
         hit_sl = results.get('hit_sl', [])
+        max_hold_closed = results.get('max_hold_closed', [])
         floating_profit = results.get('floating_profit', [])
         floating_loss = results.get('floating_loss', [])
         filled = results.get('filled', [])
-        
+
         # Take Profits
         if hit_tp:
             console.print("\n[bold green]✅ TAKE PROFIT HIT[/bold green]")
@@ -271,7 +301,7 @@ class EODRetraining:
                 console.print(f"  {item['ticker']}: Entry {item['entry']:,.0f} → "
                              f"TP {item['take_profit']:,.0f} "
                              f"([green]+{item['pnl_pct']:.1f}%[/green])")
-        
+
         # Stop Losses
         if hit_sl:
             console.print("\n[bold red]❌ STOP LOSS HIT[/bold red]")
@@ -279,7 +309,17 @@ class EODRetraining:
                 console.print(f"  {item['ticker']}: Entry {item['entry']:,.0f} → "
                              f"SL {item['stop_loss']:,.0f} "
                              f"([red]{item['pnl_pct']:.1f}%[/red])")
-        
+
+        # Max Hold Period Closed
+        if max_hold_closed:
+            console.print("\n[bold yellow]📅 MAX HOLD PERIOD (5 DAYS)[/bold yellow]")
+            for item in max_hold_closed:
+                pnl_color = "green" if item['pnl_pct'] > 0 else "red"
+                pnl_sign = "+" if item['pnl_pct'] > 0 else ""
+                console.print(f"  {item['ticker']}: Held {item['days_held']} days → "
+                             f"Exit {item['current']:,.0f} "
+                             f"([{pnl_color}]{pnl_sign}{item['pnl_pct']:.1f}%[/{pnl_color}])")
+
         # Filled Orders
         if filled:
             console.print("\n[bold cyan]📥 LIMIT ORDERS FILLED[/bold cyan]")
@@ -300,13 +340,15 @@ class EODRetraining:
         console.print(f"\n[bold]TODAY'S STATISTICS[/bold]")
         console.print(f"  Take Profits:     {len(hit_tp)}")
         console.print(f"  Stop Losses:      {len(hit_sl)}")
+        console.print(f"  Max Hold Closed:  {len(max_hold_closed)}")
         console.print(f"  Orders Filled:    {len(filled)}")
         console.print(f"  Orders Expired:   {expired}")
-        
+
         # Win rate for closed positions today
-        closed_today = len(hit_tp) + len(hit_sl)
+        closed_today = len(hit_tp) + len(hit_sl) + len(max_hold_closed)
+        wins_today = len(hit_tp) + len([p for p in max_hold_closed if p['pnl_pct'] > 0])
         if closed_today > 0:
-            win_rate = len(hit_tp) / closed_today * 100
+            win_rate = wins_today / closed_today * 100
             console.print(f"  Today's Win Rate: {win_rate:.0f}%")
         
         # Model metrics

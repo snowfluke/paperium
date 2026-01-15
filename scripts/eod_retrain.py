@@ -88,6 +88,12 @@ class EODRetraining:
     
     def _fetch_eod_data(self):
         """Fetch latest EOD prices."""
+        # Check if data is already fresh (avoid redundant API calls)
+        if self.storage.is_data_fresh():
+            latest = self.storage.get_latest_date()
+            console.print(f"  ✓ Data already up-to-date (latest: {latest})")
+            return
+        
         data = self.fetcher.fetch_batch(days=5)
         
         if not data.empty:

@@ -175,6 +175,13 @@ class MorningSignals:
     def _update_data(self):
         """Fetch and update latest price data."""
         console.print("\n[bold cyan]━━━ MARKET DATA UPDATE ━━━[/bold cyan]")
+        
+        # Check if data is already fresh (avoid redundant API calls)
+        if self.storage.is_data_fresh():
+            latest = self.storage.get_latest_date()
+            console.print(f"  [green]✓[/green] Data already up-to-date (latest: {latest})")
+            return
+        
         # Fetch last 10 days to ensure we have latest data
         data = self.fetcher.fetch_batch(days=10)
 

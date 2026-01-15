@@ -259,6 +259,32 @@ class DataStorage:
         
         return result['max_date'].iloc[0]
     
+    def is_data_fresh(self, target_date: Optional[str] = None, min_tickers: int = 50) -> bool:
+        """
+        Check if data for the target date is already in the database.
+        
+        Args:
+            target_date: Date to check (YYYY-MM-DD). Defaults to today.
+            min_tickers: Minimum number of tickers required to consider data "fresh"
+            
+        Returns:
+            True if data is fresh and sufficient, False otherwise
+        """
+        from datetime import date as dt_date
+        
+        if target_date is None:
+            target_date = dt_date.today().isoformat()
+        
+        with sqlite3.connect(self.db_path) as conn:
+            result = pd.read_sql(
+                "SELECT COUNT(DISTINCT ticker) as cnt FROM prices WHERE date = ?",
+                conn,
+                params=[target_date]
+            )
+        
+        ticker_count = result['cnt'].iloc[0] if not result.empty else 0
+        return ticker_count >= min_tickers
+    
     def save_signals(self, df: pd.DataFrame) -> int:
         """
         Save trading signals to database.

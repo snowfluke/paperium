@@ -61,9 +61,7 @@ def analyze_menu():
     console.print("\n[dim]Comprehensive analysis of a single stock[/dim]\n")
     
     ticker = Prompt.ask("Enter ticker (e.g., BBCA)")
-    portfolio = IntPrompt.ask("Portfolio value (IDR)", default=100_000_000)
-    
-    cmd = ["uv", "run", "python", "scripts/analyze.py", ticker, "--portfolio", str(portfolio)]
+    cmd = ["uv", "run", "python", "scripts/analyze.py", ticker]
     
     console.print(f"\n[yellow]Executing: {' '.join(cmd)}[/yellow]\n")
     subprocess.run(cmd)

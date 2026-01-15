@@ -6,7 +6,7 @@ import pandas as pd
 import numpy as np
 import sqlite3
 import json
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 from typing import Dict, List, Optional
 from dataclasses import dataclass, asdict
 from enum import Enum
@@ -282,18 +282,22 @@ class PositionManager:
             conn.commit()
             return result
     
-    def expire_unfilled_orders(self, created_date: str) -> int:
-        """Mark unfilled limit orders as ENTRY_NOT_HIT."""
+    def expire_unfilled_orders(self, max_age_days: int = 1) -> int:
+        """Mark unfilled limit orders older than max_age_days as ENTRY_NOT_HIT."""
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
+            
+            # Calculate the cutoff date (orders created before this should expire)
+            cutoff_date = (date.today() - timedelta(days=max_age_days)).isoformat()
             
             cursor.execute("""
                 UPDATE positions SET 
                     status = 'ENTRY_NOT_HIT',
+                    exit_date = ?,
                     exit_reason = 'LIMIT_NOT_FILLED',
                     updated_at = CURRENT_TIMESTAMP
-                WHERE status = 'PENDING' AND created_date = ?
-            """, (created_date,))
+                WHERE status = 'PENDING' AND created_date < ?
+            """, (date.today().isoformat(), cutoff_date))
             
             conn.commit()
             return cursor.rowcount

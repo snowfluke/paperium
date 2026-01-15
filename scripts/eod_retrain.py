@@ -192,9 +192,8 @@ class EODRetraining:
         return results
     
     def _expire_unfilled_orders(self) -> int:
-        """Expire limit orders that weren't filled today."""
-        today = date.today().isoformat()
-        expired = self.position_manager.expire_unfilled_orders(today)
+        """Expire limit orders that weren't filled within 1 day."""
+        expired = self.position_manager.expire_unfilled_orders(max_age_days=1)
         
         if expired > 0:
             console.print(f"  ⏰ Expired {expired} unfilled limit orders")
